@@ -4,7 +4,7 @@
 const CONFIG = {
   timeLimitSec: 60,                        // 制限時間（秒）
   flightMs: [1200, 2200],                  // 飛行アニメーションの長さ（短距離〜長距離）。飛んでいる間もタイマーは進む
-  maxZoom: 200,                            // 自動ズームの最大倍率（東京の密集地でも点が分かれるように）
+  maxZoom: 1500,                           // 自動ズームの最大倍率（東京の密集地で数百mの移動でも見えるように）
   introMs: [700, 3600, 5600],              // 「出発地は……」演出：ルーレット開始・決定・離陸の時刻（ミリ秒）
   slotsByTier: [0, 2, 4, 6, 8],            // 空港の規模ごとの、掲示板に出る便の数（tier 1〜4）
   rotateMsByTier: [0, 6000, 4500, 3000, 2000], // 便が入れ替わる間隔（ハブほど慌ただしい）
@@ -466,8 +466,8 @@ function startGame() {
 const BRIEF_EXAMPLES = [
   ['ポルトガル', '鉄砲を伝えたポルトガル人が流れ着いた島。'],
   ['フォーブス (雑誌)', '世界の大富豪を載せる経済誌の住所は、あの自動車会社の本社。'],
-  ['アラスカ州', '寒い土地は、寒い土地に住む。'],
-  ['太平洋', '太平洋の住所は、東京湾のほとり。'],
+  ['なめろう', '千葉・房総の郷土料理なのに、住所は宮崎の島。'],
+  ['地震学', '決め手は1889年の熊本地震。'],
 ];
 function briefPages() {
   const g = GOAL;
@@ -676,7 +676,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=7').then((r) => r.json()),
+      fetch('data/words.json?v=8').then((r) => r.json()),
       fetch('data/japan.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
