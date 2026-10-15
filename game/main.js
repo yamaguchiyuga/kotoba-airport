@@ -636,9 +636,50 @@ function endGame(reached) {
     : `「${esc(S.cur.word)}」で時間切れ<br>ゴールまで ${fmtKm(S.cur.distGoalKm)} km`;
   $('end-route').textContent = '航路：' + S.route.map((w) => w.word).join(' → ');
   renderRanking(rec);
+  renderReveal();
   S.showRoute = { t0: performance.now() };
   camFit([...S.route, GOAL]);
   setTimeout(() => $('screen-end').classList.remove('hidden'), 1200);
+}
+
+// ---------------------------------------------------------------- 種明かし（終了画面）
+// 言葉の住所の決め方・自分が立ち寄った言葉の決め手・言葉の住所の分布
+const shortName = (t) => t.replace(/ \(.*\)$/, '');
+function renderReveal() {
+  const ex = WORDS.find((w) => w.word === '蘭学');
+  const exText = ex
+    ? `たとえば「蘭学」の記事は、${ex.members.slice(0, 3).map(shortName).join('・')}など、長崎の場所にたくさんリンクしています。だから蘭学の住所は長崎（${esc(ex.address)}）。`
+    : '';
+  const goalWhy = GOAL.members.slice(0, 3).map(shortName).join('・');
+
+  // 立ち寄った言葉（同じ言葉は1回だけ）
+  const visited = [...new Set(S.route)];
+  const visitedHtml = visited.map((w) => `<li><b>${esc(w.word)}</b> → ${esc(w.address)}<br>
+    <span class="dim">決め手：${esc(w.members.slice(0, 3).map(shortName).join('・') || '—')}</span></li>`).join('');
+
+  // 都道府県ごとの言葉の数（上位5）と、そこに住んでいる言葉の例
+  const byPref = {};
+  for (const w of WORDS) (byPref[w.pref] ??= []).push(w);
+  const top = Object.entries(byPref).sort((a, b) => b[1].length - a[1].length).slice(0, 5);
+  const max = top[0][1].length;
+  const tokyo = (byPref['東京都'] ?? []).length;
+  const share = Math.round((tokyo / WORDS.length) * 100);
+  const bars = top.map(([pref, ws]) => {
+    const sample = ws.filter((w) => w !== GOAL).sort(() => Math.random() - 0.5).slice(0, 3).map((w) => esc(w.word)).join('、');
+    return `<li><span class="bar-label">${esc(pref)}</span><span class="bar"><i style="width:${(ws.length / max) * 100}%"></i></span><span class="bar-n">${ws.length}語</span>
+      <div class="bar-ex">${sample} …</div></li>`;
+  }).join('');
+
+  $('end-reveal').innerHTML = `
+    <h2>種明かし</h2>
+    <p>どの言葉の Wikipedia 記事も、その言葉にゆかりのある場所へリンクしています。そのリンク先が地図の上で<b>いちばん集まっているところ</b>を、その言葉の住所にしました。</p>
+    <p>${exText}ゴールの「${esc(GOAL.word)}」が東京駅のそばに住んでいるのも、${esc(goalWhy)}にリンクしているからです。</p>
+    <p>住所はデタラメではありません。言葉が生まれ、語られてきた<b>「舞台」</b>が住所になっています。この地図は、言葉の記憶を日本地図に描いたものです。</p>
+    <h2>あなたが立ち寄った言葉の決め手</h2>
+    <ul class="reveal-list">${visitedHtml}</ul>
+    <h2>言葉はどこに住んでいる？</h2>
+    <p>${WORDS.length}語のうち<b>${tokyo}語（${share}%）が東京都</b>に住んでいます。新聞社・出版社・劇場・官庁など、記事がリンクする場所の多くが東京にあるからです。言葉の世界にも「東京一極集中」がありました。</p>
+    <ol class="bars">${bars}</ol>`;
 }
 
 // 自分がたどった航路を、光る線と番号つきの言葉で描く（終了画面の後ろ）
@@ -728,7 +769,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=10').then((r) => r.json()),
+      fetch('data/words.json?v=11').then((r) => r.json()),
       fetch('data/japan.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
