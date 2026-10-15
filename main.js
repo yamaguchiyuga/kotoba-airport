@@ -225,10 +225,13 @@ function drawLive(now) {
   c.clearRect(0, 0, W, H);
   if (!GOAL) return;
 
-  // 通ってきた航路（青い点線）
-  c.strokeStyle = 'rgba(120,210,255,0.85)'; c.lineWidth = 1.8; c.setLineDash([5, 4]);
-  for (let i = 1; i < S.route.length; i++) strokeArc(c, scr(S.route[i - 1]), scr(S.route[i]));
-  c.setLineDash([]);
+  // 通ってきた航路（遊んでいる間は青い点線、終わったら光らせる）
+  if (S.ended && S.showRoute) drawRouteGlow(c, now);
+  else {
+    c.strokeStyle = 'rgba(120,210,255,0.85)'; c.lineWidth = 1.8; c.setLineDash([5, 4]);
+    for (let i = 1; i < S.route.length; i++) strokeArc(c, scr(S.route[i - 1]), scr(S.route[i]));
+    c.setLineDash([]);
+  }
 
   // ゴール（言葉界の東京駅）
   const pulse = (Math.sin(now / 300) + 1) / 2;
@@ -239,7 +242,7 @@ function drawLive(now) {
   label(c, g.x + 12, g.y - 10, `GOAL ${GOAL.word}`);
 
   // 現在地
-  if (S.cur && !S.flying && !S.intro) {
+  if (S.cur && !S.flying && !S.intro && !S.ended) {
     const p = scr(S.cur);
     c.fillStyle = '#fff';
     c.beginPath(); c.arc(p.x, p.y, 5, 0, Math.PI * 2); c.fill();
@@ -447,7 +450,7 @@ function startGame() {
   S.name = $('name').value.trim() || 'NO NAME';
   const candidates = WORDS.filter((w) => w !== GOAL && w.distGoalKm > DATA.startExcludeKm && w.flights.length && REACHABLE.has(w.id));
   const start = pick(candidates.length ? candidates : WORDS);
-  Object.assign(S, { cur: start, route: [start], legs: 0, timeLeft: CONFIG.timeLimitSec, running: false, flying: null, ended: false });
+  Object.assign(S, { cur: start, route: [start], legs: 0, timeLeft: CONFIG.timeLimitSec, running: false, flying: null, ended: false, showRoute: null });
   $('hud-name').textContent = S.name;
   $('hud-legs').textContent = 0;
   $('hud-dist').textContent = '— km';
@@ -474,15 +477,12 @@ function briefPages() {
   const ex = BRIEF_EXAMPLES.map(([w, note]) => [WORDS.find((x) => x.word === w), note]).filter(([w]) => w);
   return [
     { title: 'ルール', html: `<ul class="brief-list">
-      <li>目指すのは<b>言葉界の東京駅「${esc(g.word)}」</b>（${esc(g.address)}）。</li>
-      <li>右の<b>出発便</b>から行き先を選ぶ。便は、今いる言葉の Wikipedia 記事に出てくる言葉。</li>
-      <li>行き先が日本のどこにあるかは、<b>乗ってみるまでわからない</b>。半分はゴールから遠ざかる便。</li>
-      <li>制限時間は<b>${CONFIG.timeLimitSec}秒</b>。飛んでいる間も時間は減る。</li>
+      <li>言葉界の東京駅<b>「${esc(g.word)}」</b>を目指す。</li>
+      <li><b>出発便</b>から行き先を選んで、言葉から言葉へ乗り継ぐ。</li>
+      <li>制限時間は<b>${CONFIG.timeLimitSec}秒</b>。</li>
       <li>時間切れのとき、ゴールに一番近い人が勝ち。</li>
     </ul>` },
-    { title: '言葉の住所って？', html: `<p>すべての言葉には、日本のどこかに住所がある。</p>
-      <p>その言葉の Wikipedia 記事がリンクしている「場所」の記事を集めて、<b>いちばん密集しているところ</b>をその言葉の住所にした。</p>
-      <p class="dim">だから「関係ないだろ」と思う言葉が、意外なところに住んでいる。</p>` },
+    { title: '言葉の住所', html: `<p class="brief-big">言葉に、架空の住所を設定しました。</p>` },
     { title: '偶然の一致', html: `<ul class="brief-ex">${ex.map(([w, note]) => `<li><b>${esc(w.word.replace(/ \(.*\)$/, ''))}</b> → ${esc(w.address)}<br><span class="dim">${esc(note)}</span></li>`).join('')}</ul>` },
   ];
 }
@@ -636,7 +636,59 @@ function endGame(reached) {
     : `「${esc(S.cur.word)}」で時間切れ<br>ゴールまで ${fmtKm(S.cur.distGoalKm)} km`;
   $('end-route').textContent = '航路：' + S.route.map((w) => w.word).join(' → ');
   renderRanking(rec);
-  setTimeout(() => $('screen-end').classList.remove('hidden'), 600);
+  S.showRoute = { t0: performance.now() };
+  camFit([...S.route, GOAL]);
+  setTimeout(() => $('screen-end').classList.remove('hidden'), 1200);
+}
+
+// 自分がたどった航路を、光る線と番号つきの言葉で描く（終了画面の後ろ）
+function drawRouteGlow(c, now) {
+  const pts = S.route.map(scr);
+  const legMs = Math.max(250, Math.min(700, 4000 / Math.max(1, pts.length - 1)));
+  const prog = (now - S.showRoute.t0) / legMs;           // 何区間目まで描いたか（小数つき）
+  const pulse = (Math.sin(now / 260) + 1) / 2;
+  for (let i = 1; i < pts.length; i++) {
+    const p = Math.max(0, Math.min(1, prog - (i - 1)));
+    if (p <= 0) break;
+    c.save();
+    c.shadowColor = BLUE_GLOW; c.shadowBlur = 14 + pulse * 10;
+    c.strokeStyle = BLUE; c.lineWidth = 4;
+    strokeArc(c, pts[i - 1], pts[i], p);
+    c.restore();
+    c.strokeStyle = '#eaf8ff'; c.lineWidth = 1.5;
+    strokeArc(c, pts[i - 1], pts[i], p);
+  }
+  // 番号つきの言葉（同じ場所に何度も来たら番号をまとめる）
+  const shown = Math.min(pts.length, Math.floor(prog) + 1);
+  const seen = new Map();
+  for (let i = 0; i < shown; i++) {
+    const w = S.route[i];
+    seen.set(w, [...(seen.get(w) ?? []), i + 1]);
+  }
+  // 名前が重なるときは、空いている高さまで下にずらす
+  const boxes = [];
+  c.font = '700 12px "Noto Sans JP", sans-serif';
+  for (const [w, nums] of seen) {
+    const p = scr(w);
+    c.save(); c.shadowColor = BLUE_GLOW; c.shadowBlur = 12;
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(p.x, p.y, 4.5, 0, Math.PI * 2); c.fill();
+    c.restore();
+    const text = `${nums.join('・')}. ${w.word}`;
+    const tw = c.measureText(text).width + 8;
+    let x = p.x + 9, y = p.y - 8;
+    if (x + tw > W) x = W - tw;
+    for (let n = 0; n < 12 && boxes.some((b) => x < b.x + b.w && b.x < x + tw && y - 12 < b.y + 5 && b.y - 12 < y + 5); n++) y += 18;
+    boxes.push({ x, y, w: tw });
+    if (y !== p.y - 8) { c.strokeStyle = 'rgba(255,255,255,0.35)'; c.lineWidth = 1; c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(x, y - 4); c.stroke(); }
+    label(c, x, y, text);
+  }
+  // 全部描き終わったら、最後のほうで固まっている場所（東京など）に寄る
+  if (!S.showRoute.zoomed && prog > pts.length + 1.5) {
+    S.showRoute.zoomed = true;
+    const last = S.route[S.route.length - 1];
+    const tail = [...new Set([...S.route, GOAL])].filter((w) => km(w, last) < 50);
+    if (tail.length >= 2 && tail.length < S.route.length + 1) camFit(tail);
+  }
 }
 
 // ---------------------------------------------------------------- 記録（この端末のブラウザに保存）
@@ -676,7 +728,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=8').then((r) => r.json()),
+      fetch('data/words.json?v=10').then((r) => r.json()),
       fetch('data/japan.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;

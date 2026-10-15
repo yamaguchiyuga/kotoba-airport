@@ -118,3 +118,13 @@ a { color: var(--ink); }
 .brief-btns button { flex: 1; }
 .card button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
 .card button.ghost:hover { border-color: var(--ink); }
+
+#brief-body .brief-big { font: 900 22px/1.6 var(--sans); margin-top: 30px; }
+/* 終了画面：地図の航路が見えるように、背景を暗くせずカードを右に寄せる */
+#screen-end { background: transparent; place-items: stretch end; }
+#screen-end .card { width: min(380px, 100%); max-height: 100%; background: rgba(0,0,0,.92); }
+#screen-end #end-result { font-size: 24px; }
+@media (max-width: 860px) {
+  #screen-end { place-items: end stretch; }
+  #screen-end .card { width: 100%; max-height: 50vh; }
+}
