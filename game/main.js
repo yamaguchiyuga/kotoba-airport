@@ -466,15 +466,8 @@ function startGame() {
 }
 
 // ---------------------------------------------------------------- 搭乗前の説明（スキップできる）
-const BRIEF_EXAMPLES = [
-  ['ポルトガル', '鉄砲を伝えたポルトガル人が流れ着いた島。'],
-  ['フォーブス (雑誌)', '世界の大富豪を載せる経済誌の住所は、あの自動車会社の本社。'],
-  ['なめろう', '千葉・房総の郷土料理なのに、住所は宮崎の島。'],
-  ['地震学', '決め手は1889年の熊本地震。'],
-];
 function briefPages() {
   const g = GOAL;
-  const ex = BRIEF_EXAMPLES.map(([w, note]) => [WORDS.find((x) => x.word === w), note]).filter(([w]) => w);
   return [
     { title: 'ルール', html: `<ul class="brief-list">
       <li>言葉界の東京駅<b>「${esc(g.word)}」</b>を目指す。</li>
@@ -483,7 +476,6 @@ function briefPages() {
       <li>時間切れのとき、ゴールに一番近い人が勝ち。</li>
     </ul>` },
     { title: '言葉の住所', html: `<p class="brief-big">言葉に、架空の住所を設定しました。</p>` },
-    { title: '偶然の一致', html: `<ul class="brief-ex">${ex.map(([w, note]) => `<li><b>${esc(w.word.replace(/ \(.*\)$/, ''))}</b> → ${esc(w.address)}<br><span class="dim">${esc(note)}</span></li>`).join('')}</ul>` },
   ];
 }
 let BRIEF_PAGE = 0;
@@ -769,7 +761,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=11').then((r) => r.json()),
+      fetch('data/words.json?v=12').then((r) => r.json()),
       fetch('data/japan.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
