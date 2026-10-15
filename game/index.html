@@ -15,14 +15,22 @@
     <canvas id="base"></canvas>
     <canvas id="live"></canvas>
     <div id="hud-top">
-      <div class="hud-block"><span class="lbl">PILOT</span><span id="hud-name">—</span></div>
-      <div class="hud-block"><span class="lbl">TIME</span><span id="hud-time">3:00.0</span></div>
-      <div class="hud-block"><span class="lbl">TO GOAL</span><span id="hud-dist">— km</span></div>
-      <div class="hud-block"><span class="lbl">FLIGHTS</span><span id="hud-legs">0</span></div>
+      <div class="hud-big"><span class="jlbl">残り時間</span><span id="hud-time">3:00.0</span></div>
+      <div class="hud-big"><span class="jlbl" id="hud-dist-lbl">ゴールまで</span><span id="hud-dist">— km</span></div>
+    </div>
+    <div id="hud-sub">
+      <span><span class="lbl">PILOT</span> <b id="hud-name">—</b></span>
+      <span><span class="lbl">FLIGHTS</span> <b id="hud-legs">0</b></span>
+    </div>
+    <div id="intro" class="hidden">
+      <div id="intro-lead">出発地は……</div>
+      <div id="intro-word"></div>
+      <div id="intro-addr"></div>
     </div>
     <div id="map-tools">
       <button id="zoom-in" title="拡大">＋</button>
       <button id="zoom-out" title="縮小">－</button>
+      <button id="zoom-here" title="現在地へ">現在地</button>
       <button id="zoom-reset" title="日本全体を表示">全体</button>
     </div>
     <div id="map-hint">マウスを乗せると言葉が見える ／ ホイールで拡大・ドラッグで移動</div>
