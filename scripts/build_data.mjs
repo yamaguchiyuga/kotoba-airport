@@ -62,6 +62,11 @@ let seedState = 20261015;
 const rand = () => { seedState = (Math.imul(seedState, 1664525) + 1013904223) >>> 0; return seedState / 4294967296; };
 const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
+// --cached-only：まだ取っていない言葉はあきらめ、保存済みの分だけで仕上げる（時間がないとき用）
+const CACHED_ONLY = process.argv.includes('--cached-only');
+const cacheFile = (key) => path.join(CACHE, crypto.createHash('sha1').update(key).digest('hex') + '.json');
+const isCached = async (key) => { try { await fs.access(cacheFile(key)); return true; } catch { return false; } };
+
 async function cached(key, fn) {
   const f = path.join(CACHE, crypto.createHash('sha1').update(key).digest('hex') + '.json');
   try { return JSON.parse(await fs.readFile(f, 'utf8')); } catch {}
@@ -87,7 +92,7 @@ async function getJSON(url) {
   for (let i = 0; i < 12; i++) {
     await gate();
     try {
-      const r = await fetch(url, { headers: { 'User-Agent': UA, 'Api-User-Agent': UA } });
+      const r = await fetch(url, { headers: { 'User-Agent': UA, 'Api-User-Agent': UA }, signal: AbortSignal.timeout(15000) }); // 15秒で返事がなければやり直す
       const t = await r.text();
       if (r.ok && t.startsWith('{')) {
         const j = JSON.parse(t);
@@ -264,6 +269,12 @@ async function main() {
   // 4) 各言葉のリンク・座標・冒頭リンク
   console.log('4/7 リンクと座標（ここが一番時間がかかる）');
   const data = {};
+  if (CACHED_ONLY) {
+    const ok = [];
+    for (const t of words) if (await isCached('links:' + t) && await isCached('lead:' + t)) ok.push(t);
+    console.log(`  保存済みの分だけ使う: ${ok.length}/${words.length}語`);
+    words = ok;
+  }
   const got = await pool(words, CONCURRENCY, async (t) => {
     const [L, lead] = await Promise.all([fetchLinks(t), fetchLeadLinks(t)]);
     return { L, lead: lead.map((x) => L.redirects[x] ?? x) };
@@ -277,7 +288,9 @@ async function main() {
   const df = {};
   for (const t of words) for (const p of Object.keys(data[t].L.coords)) df[p] = (df[p] ?? 0) + 1;
   const N = words.length;
-  const weight = (p) => Math.max(0, Math.log((N + 1) / (df[p] + 1)));
+  // 補正を強める：重みを2乗し、全体の EXCLUDE_DF 以上の言葉からリンクされる場所（省庁・出版社など）は使わない
+  const EXCLUDE_DF = Number(ARG['exclude-df'] ?? 0.05);
+  const weight = (p) => (df[p] > N * EXCLUDE_DF ? 0 : Math.max(0, Math.log((N + 1) / (df[p] + 1))) ** 2);
 
   const place = {};
   for (const t of words) {
