@@ -495,20 +495,30 @@ function arrive(w) {
   setupBoard(w);
 }
 
+// 便を「ゴールに近づく便」と「遠ざかる便」に分け、掲示板には半分ずつ出す
 function setupBoard(w) {
   clearInterval(S.rotateTimer);
   const slots = Math.min(CONFIG.slotsByTier[w.tier], w.flights.length);
-  const pool = [...w.flights].sort(() => Math.random() - 0.5);
-  S.board = pool.slice(0, slots).map((id) => WORDS_BY_ID[id]);
+  const shuffle = (a) => a.sort(() => Math.random() - 0.5);
+  const near = shuffle(w.flights.filter((id) => WORDS_BY_ID[id].distGoalKm < w.distGoalKm));
+  const far = shuffle(w.flights.filter((id) => WORDS_BY_ID[id].distGoalKm >= w.distGoalKm));
+  const isFar = (b) => b.distGoalKm >= w.distGoalKm;
+  // 遠ざかる便を半分（足りなければ近づく便で埋める。逆も同じ）
+  let nFar = Math.min(far.length, Math.floor(slots / 2));
+  let nNear = Math.min(near.length, slots - nFar);
+  nFar = Math.min(far.length, slots - nNear);
+  S.board = shuffle([...far.slice(0, nFar), ...near.slice(0, nNear)]).map((id) => WORDS_BY_ID[id]);
   renderBoard(-1);
   $('board-foot').textContent = w.flights.length > slots ? '便は随時入れ替わります' : '';
   if (w.flights.length > slots) {
     S.rotateTimer = setInterval(() => {
       if (S.flying || S.ended) return;
       const shown = new Set(S.board.map((b) => b.id));
-      const rest = w.flights.filter((id) => !shown.has(id));
-      if (!rest.length) return;
       const i = Math.floor(Math.random() * S.board.length);
+      // 入れ替えるときは、同じ側（近づく／遠ざかる）の便と交代させて、半分ずつを保つ
+      const same = (isFar(S.board[i]) ? far : near).filter((id) => !shown.has(id));
+      const rest = same.length ? same : w.flights.filter((id) => !shown.has(id));
+      if (!rest.length) return;
       S.board[i] = WORDS_BY_ID[pick(rest)];
       renderBoard(i);
     }, CONFIG.rotateMsByTier[w.tier]);
@@ -597,7 +607,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json').then((r) => r.json()),
+      fetch('data/words.json?v=3').then((r) => r.json()),
       fetch('data/japan.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
