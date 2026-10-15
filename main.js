@@ -2,14 +2,14 @@
 'use strict';
 
 const CONFIG = {
-  timeLimitSec: 180,                       // 制限時間
+  timeLimitSec: 60,                        // 制限時間（秒）
   flightMs: 2200,                          // 飛行アニメーションの長さ（この間タイマーは止まる）
   arriveZoom: 5,                           // 着陸したとき、どれくらい拡大するか
   introMs: [700, 3600, 5600],              // 「出発地は……」演出：ルーレット開始・決定・離陸の時刻（ミリ秒）
   slotsByTier: [0, 2, 4, 6, 8],            // 空港の規模ごとの、掲示板に出る便の数（tier 1〜4）
   rotateMsByTier: [0, 6000, 4500, 3000, 2000], // 便が入れ替わる間隔（ハブほど慌ただしい）
   meshNeighbors: 3,                        // 白い網目：各空港を近い何か所とつなぐか
-  storageKey: 'kotoba-koku-records-v1',
+  storageKey: 'kotoba-koku-records-60s',
 };
 
 // ---------------------------------------------------------------- 状態
@@ -418,7 +418,7 @@ function loop(now) {
   }
   S.lastTick = now;
   $('hud-time').textContent = fmtTime(S.timeLeft);
-  $('hud-time').classList.toggle('warn', S.running && S.timeLeft < 30);
+  $('hud-time').classList.toggle('warn', S.running && S.timeLeft < 15);
   drawLive(now);
   requestAnimationFrame(loop);
 }
@@ -607,7 +607,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=3').then((r) => r.json()),
+      fetch('data/words.json?v=4').then((r) => r.json()),
       fetch('data/japan.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
