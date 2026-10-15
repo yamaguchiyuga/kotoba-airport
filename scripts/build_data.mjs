@@ -324,6 +324,38 @@ async function main() {
   words.forEach((t, i) => { if (addr[i]) place[t].addr = addr[i]; });
   words = words.filter((t) => place[t].addr);
 
+  // 6.5) 行き先が予想できてしまう言葉を除く（「九州」が九州にある、のような当たり前を減らす）
+  //    ・言葉そのものが場所（記事に座標がある）
+  //    ・言葉の名前が、自分の住所や「決め手になった場所」に含まれる（またはその逆）
+  if (!ARG['keep-obvious']) {
+    const own = {};
+    for (let k = 0; k < words.length; k += 50) {
+      const chunk = words.slice(k, k + 50);
+      const j = await cached('owncoord:' + chunk.join('|'), () => wp({
+        action: 'query', titles: chunk.join('|'), prop: 'coordinates', coprimary: 'primary', colimit: 'max',
+      }));
+      for (const p of j.query?.pages ?? []) if (p.coordinates?.[0]) own[p.title] = true;
+    }
+    const core = (t) => t.replace(/ \(.*\)$/, '');
+    const stem = (t) => { const s = core(t).replace(/(市|町|村|区|県|府|都|道|島|郡|地方|半島|山|川|湖|湾)$/, ''); return s.length >= 2 ? s : core(t); };
+    const obvious = (t) => {
+      if (own[t]) return '場所そのもの';
+      const a = place[t].addr, addr = `${a.pref}${a.city}${a.town}`;
+      const names = [addr, a.pref, a.city, ...place[t].members.map(core)];
+      const c = core(t), s = stem(t);
+      if (names.some((n) => n && (n.includes(c) || n.includes(s)))) return '住所に名前が入っている';
+      if (place[t].members.some((m) => core(m).length >= 2 && t.includes(core(m)))) return '名前に場所が入っている';
+      return '';
+    };
+    const removed = words.map((t) => [t, obvious(t)]).filter(([, why]) => why);
+    const byWhy = {};
+    for (const [, why] of removed) byWhy[why] = (byWhy[why] ?? 0) + 1;
+    console.log(`  予想できてしまう言葉を除外: ${removed.length}語`, byWhy);
+    console.log('   例:', removed.slice(0, 12).map(([t]) => t).join('、'));
+    const drop = new Set(removed.map(([t]) => t));
+    words = words.filter((t) => !drop.has(t));
+  }
+
   // 7) 便（行き先）を決める
   //    ・本文のリンクのみ（冒頭リンクは除外）
   //    ・お互いにリンクし合っている言葉は除外（関係が強すぎる）
