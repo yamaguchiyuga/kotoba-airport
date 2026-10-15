@@ -104,3 +104,17 @@ a { color: var(--ink); }
   #map-tools { right: 10px; bottom: 10px; }
   #map-tools button { min-width: 34px; height: 30px; font-size: 12px; }
 }
+
+/* 搭乗前の説明 */
+.brief-head { display: flex; justify-content: space-between; }
+#brief-title { font: 900 28px var(--sans); letter-spacing: .04em; color: var(--ink); margin: 10px 0 14px; }
+#brief-body { font-size: 15px; line-height: 1.8; min-height: 200px; }
+#brief-body p { margin: 0 0 10px; }
+#brief-body b { color: #9fdcff; }
+#brief-body .dim { color: var(--dim); font-size: 13px; }
+.brief-list, .brief-ex { padding-left: 18px; margin: 0; }
+.brief-list li, .brief-ex li { margin-bottom: 8px; }
+.brief-btns { display: flex; gap: 10px; margin-top: 18px; }
+.brief-btns button { flex: 1; }
+.card button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.card button.ghost:hover { border-color: var(--ink); }

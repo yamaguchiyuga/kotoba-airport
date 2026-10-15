@@ -3,8 +3,8 @@
 
 const CONFIG = {
   timeLimitSec: 60,                        // 制限時間（秒）
-  flightMs: 2200,                          // 飛行アニメーションの長さ（この間タイマーは止まる）
-  arriveZoom: 5,                           // 着陸したとき、どれくらい拡大するか
+  flightMs: [1200, 2200],                  // 飛行アニメーションの長さ（短距離〜長距離）。飛んでいる間もタイマーは進む
+  maxZoom: 200,                            // 自動ズームの最大倍率（東京の密集地でも点が分かれるように）
   introMs: [700, 3600, 5600],              // 「出発地は……」演出：ルーレット開始・決定・離陸の時刻（ミリ秒）
   slotsByTier: [0, 2, 4, 6, 8],            // 空港の規模ごとの、掲示板に出る便の数（tier 1〜4）
   rotateMsByTier: [0, 6000, 4500, 3000, 2000], // 便が入れ替わる間隔（ハブほど慌ただしい）
@@ -62,7 +62,7 @@ let HOVER = null;           // マウスが指している空港
 let CAM = null;             // カメラの目標 { k: 拡大率, cx, cy: 画面の真ん中に来る地図上の点 }。null なら止まっている
 
 // 指定した空港がちょうど画面に収まるようにカメラを動かす
-function camFit(points, maxK = CONFIG.arriveZoom) {
+function camFit(points, maxK = CONFIG.maxZoom) {
   const xs = points.map((p) => p.x), ys = points.map((p) => p.y);
   const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
   const k = Math.max(1, Math.min(maxK, (W * 0.6) / (bw || 1), (H * 0.6) / (bh || 1)));
@@ -97,6 +97,8 @@ function resize() {
   buildLandPath();
   buildMesh();
   baseDirty = true;
+  // 画面の大きさが変わっても（スマホの回転など）、遊んでいる途中なら現在地に寄り直す
+  if (S.cur && S.running && !S.flying) camFit([S.cur, GOAL]);
 }
 
 // 日本列島の形を一度だけ Path2D（図形データ）にしておく。ズームのたびに作り直さなくて済む
@@ -250,7 +252,7 @@ function drawLive(now) {
   if (S.flying) {
     const { to, t0 } = S.flying;
     const from = scr(S.flying.from), dest = scr(to);
-    const t = Math.min(1, (now - t0) / CONFIG.flightMs);
+    const t = Math.min(1, (now - t0) / S.flying.ms);
     const e = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
     c.strokeStyle = 'rgba(120,210,255,0.45)'; c.lineWidth = 1; c.setLineDash([2, 4]);
     strokeArc(c, from, dest);
@@ -345,7 +347,7 @@ function nearestWord(mx, my, maxPx = 14) {
 }
 
 function zoomAt(mx, my, factor) {
-  const k = Math.max(1, Math.min(40, V.k * factor));
+  const k = Math.max(1, Math.min(CONFIG.maxZoom, V.k * factor));
   const f = k / V.k;
   V.tx = mx - (mx - V.tx) * f; V.ty = my - (my - V.ty) * f; V.k = k;
   clampView();
@@ -422,7 +424,7 @@ function setupPointer() {
   $('zoom-in').addEventListener('click', () => { CAM = null; zoomAt(W / 2, H / 2, 1.6); });
   $('zoom-out').addEventListener('click', () => { CAM = null; zoomAt(W / 2, H / 2, 1 / 1.6); });
   $('zoom-reset').addEventListener('click', camHome);
-  $('zoom-here').addEventListener('click', () => S.cur && camFit([S.cur]));
+  $('zoom-here').addEventListener('click', () => S.cur && camFit([S.cur, GOAL]));
 }
 
 // ---------------------------------------------------------------- ゲーム進行
@@ -430,7 +432,7 @@ function loop(now) {
   const dt = Math.min(0.1, (now - S.lastTick) / 1000);
   stepCamera(dt);
   if (S.intro) stepIntro(now);
-  if (S.running && !S.flying && !S.ended) {
+  if (S.running && !S.ended) {
     S.timeLeft = Math.max(0, S.timeLeft - dt);
     if (S.timeLeft <= 0) endGame(false);
   }
@@ -450,6 +452,7 @@ function startGame() {
   $('hud-legs').textContent = 0;
   $('hud-dist').textContent = '— km';
   $('screen-start').classList.add('hidden');
+  $('screen-brief').classList.add('hidden');
   $('screen-end').classList.add('hidden');
   clearInterval(S.rotateTimer);
   $('flights').innerHTML = ''; $('board-foot').textContent = '';
@@ -457,6 +460,49 @@ function startGame() {
   $('here-meta').textContent = ''; $('board-total').textContent = '';
   $('here-sv').removeAttribute('href');
   startIntro(performance.now(), start);
+}
+
+// ---------------------------------------------------------------- 搭乗前の説明（スキップできる）
+const BRIEF_EXAMPLES = [
+  ['ポルトガル', '鉄砲を伝えたポルトガル人が流れ着いた島。'],
+  ['フォーブス (雑誌)', '世界の大富豪を載せる経済誌の住所は、あの自動車会社の本社。'],
+  ['アラスカ州', '寒い土地は、寒い土地に住む。'],
+  ['太平洋', '太平洋の住所は、東京湾のほとり。'],
+];
+function briefPages() {
+  const g = GOAL;
+  const ex = BRIEF_EXAMPLES.map(([w, note]) => [WORDS.find((x) => x.word === w), note]).filter(([w]) => w);
+  return [
+    { title: 'ルール', html: `<ul class="brief-list">
+      <li>目指すのは<b>言葉界の東京駅「${esc(g.word)}」</b>（${esc(g.address)}）。</li>
+      <li>右の<b>出発便</b>から行き先を選ぶ。便は、今いる言葉の Wikipedia 記事に出てくる言葉。</li>
+      <li>行き先が日本のどこにあるかは、<b>乗ってみるまでわからない</b>。半分はゴールから遠ざかる便。</li>
+      <li>制限時間は<b>${CONFIG.timeLimitSec}秒</b>。飛んでいる間も時間は減る。</li>
+      <li>時間切れのとき、ゴールに一番近い人が勝ち。</li>
+    </ul>` },
+    { title: '言葉の住所って？', html: `<p>すべての言葉には、日本のどこかに住所がある。</p>
+      <p>その言葉の Wikipedia 記事がリンクしている「場所」の記事を集めて、<b>いちばん密集しているところ</b>をその言葉の住所にした。</p>
+      <p class="dim">だから「関係ないだろ」と思う言葉が、意外なところに住んでいる。</p>` },
+    { title: '偶然の一致', html: `<ul class="brief-ex">${ex.map(([w, note]) => `<li><b>${esc(w.word.replace(/ \(.*\)$/, ''))}</b> → ${esc(w.address)}<br><span class="dim">${esc(note)}</span></li>`).join('')}</ul>` },
+  ];
+}
+let BRIEF_PAGE = 0;
+function showBrief() {
+  BRIEF_PAGE = 0;
+  $('screen-start').classList.add('hidden');
+  $('screen-brief').classList.remove('hidden');
+  renderBrief();
+}
+function renderBrief() {
+  const pages = briefPages(), p = pages[BRIEF_PAGE];
+  $('brief-step').textContent = `${BRIEF_PAGE + 1} / ${pages.length}`;
+  $('brief-title').textContent = p.title;
+  $('brief-body').innerHTML = p.html;
+  $('brief-next').textContent = BRIEF_PAGE === pages.length - 1 ? '出発する ▶' : '次へ ▶';
+}
+function finishBrief() {
+  $('screen-brief').classList.add('hidden');
+  startGame();
 }
 
 // ---------------------------------------------------------------- 「出発地は……」の演出
@@ -490,7 +536,7 @@ function stepIntro(now) {
     $('intro').classList.add('decided');
     $('intro-word').textContent = I.start.word;
     $('intro-addr').textContent = I.start.address;
-    camFit([I.start]);
+    camFit([I.start, GOAL]);
   } else if (t >= t3) {
     S.intro = null;
     $('intro').classList.add('go');
@@ -560,15 +606,19 @@ function takeFlight(to) {
   if (S.flying || S.ended) return;
   clearInterval(S.rotateTimer);
   document.querySelectorAll('#flights button').forEach((b) => (b.disabled = true));
-  S.flying = { from: S.cur, to, t0: performance.now() };
-  camFit([S.cur, to], CONFIG.arriveZoom);
+  // 長く飛ぶほど時間がかかる（1000km で最長）
+  const [msMin, msMax] = CONFIG.flightMs;
+  const ms = msMin + (msMax - msMin) * Math.min(1, km(S.cur, to) / 1000);
+  S.flying = { from: S.cur, to, t0: performance.now(), ms };
+  // 出発地と行き先が両方入るまで引く（近い移動ほど大きく拡大される）
+  camFit([S.cur, to]);
 }
 
 function land(to) {
   S.flying = null;
   S.legs++;
   S.route.push(to);
-  camFit([to]);
+  camFit([to, GOAL]);
   arrive(to);
 }
 
@@ -626,7 +676,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=5').then((r) => r.json()),
+      fetch('data/words.json?v=7').then((r) => r.json()),
       fetch('data/japan.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
@@ -645,8 +695,10 @@ async function boot() {
     setupPointer();
     const ready = () => ($('btn-start').disabled = !$('name').value.trim());
     $('name').addEventListener('input', ready);
-    $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !$('btn-start').disabled) startGame(); });
-    $('btn-start').addEventListener('click', startGame);
+    $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !$('btn-start').disabled) showBrief(); });
+    $('btn-start').addEventListener('click', showBrief);
+    $('brief-skip').addEventListener('click', finishBrief);
+    $('brief-next').addEventListener('click', () => { if (++BRIEF_PAGE >= briefPages().length) finishBrief(); else renderBrief(); });
     $('btn-again').addEventListener('click', () => { camHome(); $('screen-end').classList.add('hidden'); $('screen-start').classList.remove('hidden'); $('name').focus(); });
     window.addEventListener('resize', resize);
     $('name').focus();
