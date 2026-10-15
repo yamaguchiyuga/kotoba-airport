@@ -46,6 +46,8 @@ a { color: var(--ink); }
 #panel section { padding: 18px 20px; border-bottom: 1px solid var(--line); }
 #here h1 { margin: 8px 0 6px; font-size: 34px; font-weight: 900; line-height: 1.15; word-break: break-all; }
 #here-addr { font-size: 14px; color: var(--ink); }
+#here-desc { margin: 10px 0 0; font-size: 13px; line-height: 1.7; color: #c9d6ee; }
+#here-desc:empty { display: none; }
 #here-sv { display: inline-block; margin-top: 10px; font: 12px var(--mono); color: var(--dim); text-decoration: none; border-bottom: 1px dashed var(--dim); }
 #here-sv:hover { color: var(--ink); border-color: var(--ink); }
 #here-meta { margin-top: 10px; font: 12px var(--mono); color: var(--dim); }

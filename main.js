@@ -290,7 +290,7 @@ function drawLive(now) {
     const p = scr(HOVER);
     c.strokeStyle = BLUE; c.lineWidth = 1.5;
     c.beginPath(); c.arc(p.x, p.y, 7, 0, Math.PI * 2); c.stroke();
-    tooltip(c, p.x + 12, p.y - 14, HOVER.word, HOVER.address || '');
+    tooltip(c, p.x + 12, p.y - 14, HOVER.word, HOVER.address || '', HOVER.desc || '');
   }
 }
 
@@ -302,18 +302,36 @@ function label(c, x, y, text) {
   c.fillStyle = '#fff'; c.fillText(text, x, y);
 }
 
-function tooltip(c, x, y, title, sub) {
+// 文字数で折り返す（日本語は単語の区切りがないので1文字ずつ測る）
+function wrapText(c, text, maxW) {
+  const lines = []; let line = '';
+  for (const ch of text) {
+    if (c.measureText(line + ch).width > maxW && line) { lines.push(line); line = ch; } else line += ch;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function tooltip(c, x, y, title, sub, desc = '') {
+  const DESC_W = Math.min(260, W * 0.6);
   c.font = '900 15px "Noto Sans JP", sans-serif';
   const w1 = c.measureText(title).width;
   c.font = '11px "Noto Sans JP", sans-serif';
   const w2 = c.measureText(sub).width;
-  const w = Math.max(w1, w2) + 16, h = sub ? 42 : 26;
+  c.font = '12px "Noto Sans JP", sans-serif';
+  const lines = desc ? wrapText(c, desc, DESC_W) : [];
+  const w3 = lines.length ? Math.max(...lines.map((l) => c.measureText(l).width)) : 0;
+  const w = Math.max(w1, w2, w3) + 16, h = (sub ? 42 : 26) + (lines.length ? lines.length * 17 + 6 : 0);
   if (x + w > W - 4) x = x - w - 24;
+  if (x < 12) x = 12;
+  if (y + h - 16 > H - 4) y = H - 4 - h + 16;
   if (y - 16 < 4) y = 20;
-  c.fillStyle = 'rgba(0,8,30,0.92)'; c.fillRect(x - 8, y - 16, w, h);
+  c.fillStyle = 'rgba(0,8,30,0.94)'; c.fillRect(x - 8, y - 16, w, h);
   c.strokeStyle = BLUE; c.lineWidth = 1; c.strokeRect(x - 8 + 0.5, y - 16 + 0.5, w - 1, h - 1);
   c.fillStyle = '#fff'; c.font = '900 15px "Noto Sans JP", sans-serif'; c.fillText(title, x, y);
   if (sub) { c.fillStyle = '#9fc2ff'; c.font = '11px "Noto Sans JP", sans-serif'; c.fillText(sub, x, y + 18); }
+  c.fillStyle = '#e8eefc'; c.font = '12px "Noto Sans JP", sans-serif';
+  lines.forEach((l, i) => c.fillText(l, x, y + (sub ? 18 : 0) + 22 + i * 17));
 }
 
 // ---------------------------------------------------------------- マウス操作（ホバー・ズーム・ドラッグ）
@@ -435,7 +453,7 @@ function startGame() {
   $('screen-end').classList.add('hidden');
   clearInterval(S.rotateTimer);
   $('flights').innerHTML = ''; $('board-foot').textContent = '';
-  $('here-word').textContent = '……'; $('here-addr').textContent = '出発地を抽選中';
+  $('here-word').textContent = '……'; $('here-addr').textContent = '出発地を抽選中'; $('here-desc').textContent = '';
   $('here-meta').textContent = ''; $('board-total').textContent = '';
   $('here-sv').removeAttribute('href');
   startIntro(performance.now(), start);
@@ -486,6 +504,7 @@ function arrive(w) {
   S.cur = w;
   $('here-word').textContent = w.word;
   $('here-addr').textContent = w.address || '—';
+  $('here-desc').textContent = w.desc || '';
   $('here-sv').href = streetView(w);
   $('here-meta').textContent = `${['', '地方空港', '中規模空港', '拠点空港', 'ハブ空港'][w.tier]} / ${w.lat.toFixed(4)}, ${w.lon.toFixed(4)}`;
   $('board-total').textContent = `本日の発着 ${w.linksTotal}便`;
@@ -607,7 +626,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=4').then((r) => r.json()),
+      fetch('data/words.json?v=5').then((r) => r.json()),
       fetch('data/japan.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
