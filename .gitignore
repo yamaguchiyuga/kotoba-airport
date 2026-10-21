@@ -3,3 +3,5 @@ build.log
 .claude/
 node_modules/
 CLAUDE_CODE*.md
+build_v2.log
+build_v2b.log

@@ -13,7 +13,7 @@ const CONTACT = ARG.contact ?? process.env.KOTOBA_CONTACT ?? '';
 const UA = `KotobaKoku/0.2 (university data-visualization class project${CONTACT ? '; ' + CONTACT : ''}) node-fetch`;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE = path.join(ROOT, 'cache');
-const FILE = path.join(ROOT, 'game', 'data', 'words.json');
+const FILE = ARG.file ? path.resolve(ARG.file) : path.join(ROOT, 'game', 'data', 'words.json');  // --file で v2 などのファイルも指定できる
 const MAX_CHARS = 80;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

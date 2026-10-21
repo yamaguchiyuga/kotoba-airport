@@ -281,6 +281,12 @@ async function main() {
   }, 'リンク');
   words.forEach((t, i) => { if (got[i]) data[t] = got[i]; });
   words = words.filter((t) => data[t]);
+  // --fetch-only：取得（cache/ への保存）だけして終わる。v2 は住所を別の方法で決めるので、ここまでで十分
+  if (process.argv.includes('--fetch-only')) {
+    await fs.writeFile(path.join(CACHE, 'v2_words.json'), JSON.stringify({ words, cats }));
+    console.log(`取得完了: ${words.length}語（cache/v2_words.json に一覧を保存）`);
+    return;
+  }
 
   // 5) 住所（緯度経度）を決める
   //    どの言葉からもよくリンクされる場所（省庁・出版社・テレビ局など）は重みを下げる（IDF）

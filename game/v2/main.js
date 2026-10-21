@@ -1,15 +1,16 @@
-// 言葉航空 — ゲーム本体（外部ライブラリなし）
+// 言葉航空 v2（世界版） — ゲーム本体（外部ライブラリなし）
 'use strict';
 
 const CONFIG = {
   timeLimitSec: 60,                        // 制限時間（秒）
   flightMs: [1200, 2200],                  // 飛行アニメーションの長さ（短距離〜長距離）。飛んでいる間もタイマーは進む
-  maxZoom: 1500,                           // 自動ズームの最大倍率（東京の密集地で数百mの移動でも見えるように）
+  maxZoom: 120,                            // 自動ズームの最大倍率（世界地図なので v1 より小さい）
+  flightKmMax: 12000,                      // この距離で飛行時間が最長になる
   introMs: [700, 3600, 5600],              // 「出発地は……」演出：ルーレット開始・決定・離陸の時刻（ミリ秒）
   slotsByTier: [0, 2, 4, 6, 8],            // 空港の規模ごとの、掲示板に出る便の数（tier 1〜4）
   rotateMsByTier: [0, 6000, 4500, 3000, 2000], // 便が入れ替わる間隔（ハブほど慌ただしい）
   meshNeighbors: 3,                        // 白い網目：各空港を近い何か所とつなぐか
-  storageKey: 'kotoba-koku-records-60s',
+  storageKey: 'kotoba-koku-v2-records',
 };
 
 // ---------------------------------------------------------------- 状態
@@ -39,7 +40,7 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ---------------------------------------------------------------- 地図（メルカトル図法・自前）
-const VIEW = { lonMin: 122.8, lonMax: 146.2, latMin: 24.0, latMax: 45.8 };
+const VIEW = { lonMin: -180, lonMax: 180, latMin: -57, latMax: 76 };
 const merc = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
 let PROJ = null;
 function fitProjection(w, h) {
@@ -149,8 +150,8 @@ function drawBase() {
   // 経緯線のグリッド
   c.strokeStyle = 'rgba(80,140,255,0.08)'; c.lineWidth = px;
   c.beginPath();
-  for (let lon = 124; lon <= 146; lon += 2) { const [x1, y1] = PROJ(VIEW.latMin, lon), [x2, y2] = PROJ(VIEW.latMax, lon); c.moveTo(x1, y1); c.lineTo(x2, y2); }
-  for (let lat = 24; lat <= 46; lat += 2) { const [x1, y1] = PROJ(lat, VIEW.lonMin), [x2, y2] = PROJ(lat, VIEW.lonMax); c.moveTo(x1, y1); c.lineTo(x2, y2); }
+  for (let lon = -180; lon <= 180; lon += 30) { const [x1, y1] = PROJ(VIEW.latMin, lon), [x2, y2] = PROJ(VIEW.latMax, lon); c.moveTo(x1, y1); c.lineTo(x2, y2); }
+  for (let lat = -45; lat <= 75; lat += 15) { const [x1, y1] = PROJ(lat, VIEW.lonMin), [x2, y2] = PROJ(lat, VIEW.lonMax); c.moveTo(x1, y1); c.lineTo(x2, y2); }
   c.stroke();
 
   // 陸地：日本列島を青く塗る（点が日本のどこにあるか分かるように）
@@ -233,7 +234,7 @@ function drawLive(now) {
     c.setLineDash([]);
   }
 
-  // ゴール（言葉界の東京駅）
+  // ゴール（言葉界の成田空港）
   const pulse = (Math.sin(now / 300) + 1) / 2;
   const g = scr(GOAL);
   c.strokeStyle = '#fff'; c.lineWidth = 1.5;
@@ -470,12 +471,12 @@ function briefPages() {
   const g = GOAL;
   return [
     { title: 'ルール', html: `<ul class="brief-list">
-      <li>言葉界の東京駅<b>「${esc(g.word)}」</b>を目指す。</li>
+      <li>言葉界の成田空港<b>「${esc(g.word)}」</b>を目指す。</li>
       <li><b>出発便</b>から行き先を選んで、言葉から言葉へ乗り継ぐ。</li>
       <li>制限時間は<b>${CONFIG.timeLimitSec}秒</b>。</li>
       <li>時間切れのとき、ゴールに一番近い人が勝ち。</li>
     </ul>` },
-    { title: '言葉の住所', html: `<p class="brief-big">言葉に、架空の住所を設定しました。</p>` },
+    { title: '言葉の住所', html: `<p class="brief-big">言葉に、世界の空港を住所として設定しました。</p>` },
   ];
 }
 let BRIEF_PAGE = 0;
@@ -544,7 +545,7 @@ function arrive(w) {
   $('here-addr').textContent = w.address || '—';
   $('here-desc').textContent = w.desc || '';
   $('here-sv').href = streetView(w);
-  $('here-meta').textContent = `${['', '地方空港', '中規模空港', '拠点空港', 'ハブ空港'][w.tier]} / ${w.lat.toFixed(4)}, ${w.lon.toFixed(4)}`;
+  $('here-meta').textContent = `${['', '地方空港', '中規模空港', '拠点空港', 'ハブ空港'][w.tier]} / ${w.iata} / ${w.lat.toFixed(3)}, ${w.lon.toFixed(3)}`;
   $('board-total').textContent = `本日の発着 ${w.linksTotal}便`;
   $('hud-dist').textContent = `${fmtKm(w.distGoalKm)} km`;
   $('hud-legs').textContent = S.legs;
@@ -598,9 +599,9 @@ function takeFlight(to) {
   if (S.flying || S.ended) return;
   clearInterval(S.rotateTimer);
   document.querySelectorAll('#flights button').forEach((b) => (b.disabled = true));
-  // 長く飛ぶほど時間がかかる（1000km で最長）
+  // 長く飛ぶほど時間がかかる（flightKmMax で最長）
   const [msMin, msMax] = CONFIG.flightMs;
-  const ms = msMin + (msMax - msMin) * Math.min(1, km(S.cur, to) / 1000);
+  const ms = msMin + (msMax - msMin) * Math.min(1, km(S.cur, to) / CONFIG.flightKmMax);
   S.flying = { from: S.cur, to, t0: performance.now(), ms };
   // 出発地と行き先が両方入るまで引く（近い移動ほど大きく拡大される）
   camFit([S.cur, to]);
@@ -624,7 +625,7 @@ function endGame(reached) {
 
   $('end-kind').textContent = reached ? 'ARRIVED' : 'TIME UP';
   $('end-result').innerHTML = reached
-    ? `言葉界の東京駅「${esc(GOAL.word)}」に到着！<br>${fmtTime(used)}・${S.legs}便`
+    ? `言葉界の成田空港「${esc(GOAL.word)}」に到着！<br>${fmtTime(used)}・${S.legs}便`
     : `「${esc(S.cur.word)}」で時間切れ<br>ゴールまで ${fmtKm(S.cur.distGoalKm)} km`;
   $('end-route').textContent = '航路：' + S.route.map((w) => w.word).join(' → ');
   renderRanking(rec);
@@ -638,39 +639,31 @@ function endGame(reached) {
 // 言葉の住所の決め方・自分が立ち寄った言葉の決め手・言葉の住所の分布
 const shortName = (t) => t.replace(/ \(.*\)$/, '');
 function renderReveal() {
-  const ex = WORDS.find((w) => w.word === '蘭学');
-  const exText = ex
-    ? `たとえば「蘭学」の記事は、${ex.members.slice(0, 3).map(shortName).join('・')}など、長崎の場所にたくさんリンクしています。だから蘭学の住所は長崎（${esc(ex.address)}）。`
-    : '';
-  const goalWhy = GOAL.members.slice(0, 3).map(shortName).join('・');
-
-  // 立ち寄った言葉（同じ言葉は1回だけ）
+  const near = (w, n = 3) => w.members.slice(0, n).map(shortName).join('・') || '—';
   const visited = [...new Set(S.route)];
   const visitedHtml = visited.map((w) => `<li><b>${esc(w.word)}</b> → ${esc(w.address)}<br>
-    <span class="dim">決め手：${esc(w.members.slice(0, 3).map(shortName).join('・') || '—')}</span></li>`).join('');
+    <span class="dim">意味のご近所：${esc(near(w))}</span></li>`).join('');
 
-  // 都道府県ごとの言葉の数（上位5）と、そこに住んでいる言葉の例
-  const byPref = {};
-  for (const w of WORDS) (byPref[w.pref] ??= []).push(w);
-  const top = Object.entries(byPref).sort((a, b) => b[1].length - a[1].length).slice(0, 5);
+  // 国ごとの言葉の数（上位5）と、そこに住んでいる言葉の例
+  const byC = {};
+  for (const w of WORDS) (byC[w.country] ??= []).push(w);
+  const top = Object.entries(byC).sort((a, b) => b[1].length - a[1].length).slice(0, 5);
   const max = top[0][1].length;
-  const tokyo = (byPref['東京都'] ?? []).length;
-  const share = Math.round((tokyo / WORDS.length) * 100);
-  const bars = top.map(([pref, ws]) => {
+  const bars = top.map(([c, ws]) => {
     const sample = ws.filter((w) => w !== GOAL).sort(() => Math.random() - 0.5).slice(0, 3).map((w) => esc(w.word)).join('、');
-    return `<li><span class="bar-label">${esc(pref)}</span><span class="bar"><i style="width:${(ws.length / max) * 100}%"></i></span><span class="bar-n">${ws.length}語</span>
+    return `<li><span class="bar-label">${esc(c)}</span><span class="bar"><i style="width:${(ws.length / max) * 100}%"></i></span><span class="bar-n">${ws.length}語</span>
       <div class="bar-ex">${sample} …</div></li>`;
   }).join('');
 
   $('end-reveal').innerHTML = `
     <h2>種明かし</h2>
-    <p>どの言葉の Wikipedia 記事も、その言葉にゆかりのある場所へリンクしています。そのリンク先が地図の上で<b>いちばん集まっているところ</b>を、その言葉の住所にしました。</p>
-    <p>${exText}ゴールの「${esc(GOAL.word)}」が東京駅のそばに住んでいるのも、${esc(goalWhy)}にリンクしているからです。</p>
-    <p>住所はデタラメではありません。言葉が生まれ、語られてきた<b>「舞台」</b>が住所になっています。この地図は、言葉の記憶を日本地図に描いたものです。</p>
-    <h2>あなたが立ち寄った言葉の決め手</h2>
+    <p>言葉の住所は、その言葉の意味とも、実際の土地とも関係ありません。決め手は<b>言葉どうしのつながり</b>だけです。</p>
+    <p>Wikipedia で<b>同じ記事にリンクしている言葉どうし</b>を「意味が近い」とみなして、${WORDS.length}語の「意味の地図」を作りました（Mikolov ら 2013 の単語ベクトルの考え方）。その地図を、近い言葉が隣どうしのまま、世界の空港に重ねています。</p>
+    <p>だから、<b>近くの空港には意味の近い言葉</b>が住んでいます。ゴールの「${esc(GOAL.word)}」のご近所は、${esc(near(GOAL, 5))}。ゴールに近づくには、こういう言葉へ向かう便を選ぶのが近道でした。</p>
+    <h2>あなたが立ち寄った言葉</h2>
     <ul class="reveal-list">${visitedHtml}</ul>
     <h2>言葉はどこに住んでいる？</h2>
-    <p>${WORDS.length}語のうち<b>${tokyo}語（${share}%）が東京都</b>に住んでいます。新聞社・出版社・劇場・官庁など、記事がリンクする場所の多くが東京にあるからです。言葉の世界にも「東京一極集中」がありました。</p>
+    <p>空港の多い国ほど、たくさんの言葉が住んでいます。</p>
     <ol class="bars">${bars}</ol>`;
 }
 
@@ -761,8 +754,8 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=12').then((r) => r.json()),
-      fetch('data/japan.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('data/words.json?v=2').then((r) => r.json()),
+      fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
     WORDS_BY_ID = Object.fromEntries(WORDS.map((w) => [w.id, w]));
@@ -774,8 +767,8 @@ async function boot() {
     REACHABLE.add(GOAL.id);
     while (queue.length) for (const from of inbound[queue.shift()] ?? []) if (!REACHABLE.has(from)) { REACHABLE.add(from); queue.push(from); }
     $('goal-word').textContent = `「${GOAL.word}」`;
-    $('hud-dist-lbl').textContent = `${GOAL.word}（${GOAL.pref.replace(/[都道府県]$/, '')}）まで`;
-    $('load-msg').textContent = `空港 ${WORDS.length} か所 / 言葉界の東京駅は「${GOAL.word}」（${GOAL.address}）`;
+    $('hud-dist-lbl').textContent = `${GOAL.word}（成田）まで`;
+    $('load-msg').textContent = `空港 ${WORDS.length} か所 / 言葉界の成田空港は「${GOAL.word}」（${GOAL.address}）`;
     resize();
     setupPointer();
     const ready = () => ($('btn-start').disabled = !$('name').value.trim());
