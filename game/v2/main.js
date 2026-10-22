@@ -395,7 +395,7 @@ function setupPointer() {
   }, { passive: false });
 
   el.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('#hud-top, #map-tools')) return;
+    if (e.target.closest('#hud-top, #airport-card')) return;
     touches.set(e.pointerId, pos(e));
     el.setPointerCapture(e.pointerId);
     if (touches.size === 2) {
@@ -441,10 +441,6 @@ function setupPointer() {
   el.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') HOVER = null; });
   el.addEventListener('dblclick', camHome);
 
-  $('zoom-in').addEventListener('click', () => { CAM = null; zoomAt(W / 2, H / 2, 1.6); });
-  $('zoom-out').addEventListener('click', () => { CAM = null; zoomAt(W / 2, H / 2, 1 / 1.6); });
-  $('zoom-reset').addEventListener('click', camHome);
-  $('zoom-here').addEventListener('click', () => S.cur && camCenter(S.cur));
 }
 
 // ---------------------------------------------------------------- ゲーム進行
@@ -781,8 +777,9 @@ function renderBoard(newIndex) {
     li.innerHTML = `<button><span class="code">${flightCode(S.cur, to)}</span><span class="dest">${esc(to.word)} 行き</span><span class="stat">${boost ? '追い風' : 'BOARDING'}</span></button>`;
     li.querySelector('button').addEventListener('click', () => takeFlight(to));
     ol.appendChild(li);
-    // 行き先の写真を先に取りに行っておく（着いた瞬間に出せるように）
-    if (to.wiki) getPhoto(to.wiki).then((p) => { if (p) new Image().src = p.src; });
+    // 行き先の写真を先に取りに行っておく（着いた瞬間に出せるように）。
+    // Wikipedia に負担をかけないよう、掲示板が新しく出たときの最初の2便だけ
+    if (newIndex === -1 && i < 2 && to.wiki) getPhoto(to.wiki).then((p) => { if (p) new Image().src = p.src; });
   });
 }
 
@@ -984,7 +981,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=15').then((r) => r.json()),
+      fetch('data/words.json?v=17').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
