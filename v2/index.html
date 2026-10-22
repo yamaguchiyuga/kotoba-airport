@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20">
+<link rel="stylesheet" href="style.css?v=21">
 </head>
 <body>
 <div id="app">
@@ -49,6 +49,7 @@
       <div class="lbl">現在地 / NOW AT</div>
       <h1 id="here-word">—</h1>
       <p id="here-desc"></p>
+      <div id="here-coin" hidden></div>
     </section>
     <section id="board">
       <div class="board-head">
@@ -96,13 +97,14 @@
 
 <aside id="reveal-pop" class="hidden">
   <div class="pop-head">
-    <div class="pop-tabs"><button id="tab-route" class="on">航路</button><button id="tab-reveal">種明かし</button></div>
+    <div class="pop-tabs"><button id="tab-route" class="on">航路</button><button id="tab-reveal">種明かし</button><button id="tab-coin">偶然の一致</button></div>
     <button id="reveal-close" title="閉じる">✕ 閉じる</button>
   </div>
   <div id="pane-route"><ol id="pop-route"></ol></div>
   <div id="pane-reveal" class="hidden"><div id="end-reveal"></div></div>
+  <div id="pane-coin" class="hidden"><div id="pop-coin"></div></div>
 </aside>
-<button id="reveal-tab" class="hidden">▲ 航路・種明かし</button>
+<button id="reveal-tab" class="hidden">▲ 航路・種明かし・偶然の一致</button>
 
 <div id="screen-end" class="screen hidden">
   <div class="card wide">
@@ -115,6 +117,6 @@
   </div>
 </div>
 
-<script src="main.js?v=20"></script>
+<script src="main.js?v=21"></script>
 </body>
 </html>
