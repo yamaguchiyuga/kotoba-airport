@@ -552,21 +552,42 @@ function stepIntro(now) {
 // ---------------------------------------------------------------- 空港の写真（その場で Wikipedia から取ってくる）
 // データには空港の記事名だけが入っている。写真は、着いたときに遊んでいる人のブラウザが取りに行く。
 // 自由に使えるライセンスの写真だけ（Wikipedia の pageimages は標準で free のみを返す）
+// 選び方：
+//   ① その空港の Wikimedia Commons 専用カテゴリ（記事 → Wikidata の「Commons のカテゴリ」）から、
+//      ターミナルの中・外観らしい写真を優先して選ぶ（空撮・地図・ロゴは除く）。Commons の写真はすべて自由ライセンス
+//   ② カテゴリがなければ、英語版記事の代表写真
+// 同じ空港は一度だけ取りに行く（取りに行っている途中の分も共有する）
 const PHOTO_CACHE = new Map();
-async function getPhoto(title) {
-  if (PHOTO_CACHE.has(title)) return PHOTO_CACHE.get(title);
-  let photo = null;
-  try {
-    const url = 'https://en.wikipedia.org/w/api.php?' + new URLSearchParams({
-      action: 'query', format: 'json', formatversion: 2, origin: '*', redirects: 1,
-      prop: 'pageimages', piprop: 'thumbnail|name', pithumbsize: 480, titles: title,
-    });
-    const j = await (await fetch(url)).json();
-    const p = j.query?.pages?.[0];
-    if (p?.thumbnail?.source) photo = { src: p.thumbnail.source, page: 'https://en.wikipedia.org/wiki/File:' + encodeURIComponent(p.pageimage ?? '') };
-  } catch {}
-  PHOTO_CACHE.set(title, photo);
-  return photo;
+const PHOTO_GOOD = /terminal|interior|inside|hall|check.?in|departure|arrival|lounge|concourse|gate|lobby|entrance|exterior|facade|building|front/i;
+const PHOTO_BEST = /interior|inside|hall|check.?in|departure|lounge|concourse|lobby/i;
+const PHOTO_BAD = /aerial|from.?above|satellite|usgs|orthophoto|map|logo|diagram|chart|\.svg|\.pdf|\.tif|plan\b|locator|seal|flag|ticket|boarding.?pass|stamp/i;
+const wikiApi = async (host, params) =>
+  (await fetch(`https://${host}/w/api.php?` + new URLSearchParams({ format: 'json', formatversion: 2, origin: '*', ...params }))).json();
+function getPhoto(title) {
+  if (!PHOTO_CACHE.has(title)) PHOTO_CACHE.set(title, findPhoto(title).catch(() => null));
+  return PHOTO_CACHE.get(title);
+}
+async function findPhoto(title) {
+  const a = await wikiApi('en.wikipedia.org', { action: 'query', redirects: 1, titles: title,
+    prop: 'pageprops|pageimages', ppprop: 'wikibase_item', piprop: 'thumbnail|name', pithumbsize: 480 });
+  const page = a.query?.pages?.[0];
+  // ① Commons の専用カテゴリから
+  const qid = page?.pageprops?.wikibase_item;
+  if (qid) {
+    const e = await wikiApi('www.wikidata.org', { action: 'wbgetclaims', entity: qid, property: 'P373' });
+    const cat = e.claims?.P373?.[0]?.mainsnak?.datavalue?.value;
+    if (cat) {
+      const f = await wikiApi('commons.wikimedia.org', { action: 'query', generator: 'categorymembers', gcmtitle: 'Category:' + cat,
+        gcmtype: 'file', gcmlimit: 50, prop: 'imageinfo', iiprop: 'url|mime', iiurlwidth: 480 });
+      const files = (f.query?.pages ?? []).filter((p) => /image\/(jpeg|png)/.test(p.imageinfo?.[0]?.mime ?? '') && !PHOTO_BAD.test(p.title));
+      const good = files.filter((p) => PHOTO_GOOD.test(p.title)).sort((x, y) => (PHOTO_BEST.test(y.title) ? 1 : 0) - (PHOTO_BEST.test(x.title) ? 1 : 0));
+      const pick = good[0] ?? files[0];
+      if (pick?.imageinfo?.[0]?.thumburl) return { src: pick.imageinfo[0].thumburl, page: 'https://commons.wikimedia.org/wiki/' + encodeURIComponent(pick.title) };
+    }
+  }
+  // ② 記事の代表写真
+  if (page?.thumbnail?.source) return { src: page.thumbnail.source, page: 'https://en.wikipedia.org/wiki/File:' + encodeURIComponent(page.pageimage ?? '') };
+  return null;
 }
 // 写真の枠はいつも出しておき（写真がないときは ✈ の印）、写真が届いたら差し替える
 function showPhoto(w) {
@@ -700,6 +721,8 @@ function renderBoard(newIndex) {
     li.innerHTML = `<button><span class="code">${flightCode(S.cur, to)}</span><span class="dest">${esc(to.word)} 行き</span><span class="stat">${boost ? '追い風' : 'BOARDING'}</span></button>`;
     li.querySelector('button').addEventListener('click', () => takeFlight(to));
     ol.appendChild(li);
+    // 行き先の写真を先に取りに行っておく（着いた瞬間に出せるように）
+    if (to.wiki) getPhoto(to.wiki).then((p) => { if (p) new Image().src = p.src; });
   });
 }
 
@@ -901,7 +924,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=8').then((r) => r.json()),
+      fetch('data/words.json?v=9').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
