@@ -549,6 +549,7 @@ function stepIntro(now) {
     $('intro').classList.add('go');
     setTimeout(() => $('intro').classList.add('hidden'), 500);
     S.running = true;
+    $('btn-quit').hidden = false;
     arrive(I.start);
   }
 }
@@ -806,18 +807,20 @@ function land(to) {
   arrive(to);
 }
 
-function endGame(reached) {
+// quit：終了ボタンで途中でやめたとき
+function endGame(reached, quit = false) {
   if (S.ended) return;
   S.ended = true; S.running = false;
+  $('btn-quit').hidden = true;
   clearInterval(S.rotateTimer);
   const used = CONFIG.timeLimitSec - S.timeLeft;
   const rec = { name: S.name, reached, time: +used.toFixed(1), dist: S.cur.distGoalKm, legs: S.legs, last: S.cur.word, at: Date.now() };
   const all = loadRecords(); all.push(rec); saveRecords(all);
 
-  $('end-kind').textContent = reached ? 'ARRIVED' : 'TIME UP';
+  $('end-kind').textContent = reached ? 'ARRIVED' : quit ? 'QUIT' : 'TIME UP';
   $('end-result').innerHTML = reached
     ? `言葉界の成田空港「${esc(GOAL.word)}」に到着！<br>${fmtTime(used)}・${S.legs}便`
-    : `「${esc(S.cur.word)}」で時間切れ<br>ゴールまで ${fmtKm(S.cur.distGoalKm)} km`;
+    : `「${esc(S.cur.word)}」で${quit ? '途中終了' : '時間切れ'}<br>ゴールまで ${fmtKm(S.cur.distGoalKm)} km`;
   $('end-route').textContent = '航路：' + S.route.map((w) => w.word).join(' → ');
   renderRanking(rec);
   renderReveal();
@@ -1059,7 +1062,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=21').then((r) => r.json()),
+      fetch('data/words.json?v=22').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
@@ -1087,6 +1090,10 @@ async function boot() {
     $('tab-route').addEventListener('click', () => popTab('route'));
     $('tab-reveal').addEventListener('click', () => popTab('reveal'));
     $('tab-coin').addEventListener('click', () => popTab('coin'));
+    $('btn-quit').addEventListener('click', () => {
+      if (!S.running || S.ended) return;
+      if (window.confirm('本当に終了しますか？（今いる空港からゴールまでの距離が記録されます）')) endGame(false, true);
+    });
     $('btn-again').addEventListener('click', () => { hideReveal(); camHome(); $('screen-end').classList.add('hidden'); $('screen-start').classList.remove('hidden'); $('name').focus(); });
     window.addEventListener('resize', resize);
     $('name').focus();

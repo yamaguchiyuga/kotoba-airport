@@ -310,3 +310,9 @@ a { color: var(--ink); }
   animation: coinIn .6s ease-out; }
 #here-coin b { color: #ffd34f; margin-right: 4px; }
 @keyframes coinIn { from { transform: scale(.9); opacity: 0; } }
+
+/* 途中で終了するボタン：距離表示のすぐ下に小さく */
+#hud-top { flex-direction: column; align-items: flex-start; gap: 6px; }
+#btn-quit { pointer-events: auto; background: rgba(0, 8, 30, .82); color: var(--dim); border: 1px solid var(--line);
+  padding: 3px 10px; font: 700 11px var(--sans); letter-spacing: .08em; cursor: pointer; }
+#btn-quit:hover { color: #ff8a8a; border-color: #ff8a8a; }
