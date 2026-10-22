@@ -1,0 +1,1106 @@
+// 言葉航空 v2（世界版） — ゲーム本体（外部ライブラリなし）
+'use strict';
+
+const CONFIG = {
+  timeLimitSec: 60,                        // 制限時間（秒）
+  flightMs: [1200, 2200],                  // 飛行アニメーションの長さ（短距離〜長距離）。飛んでいる間もタイマーは進む
+  // 便の選び方
+  hopMinKm: 800,                           // 便の飛距離の上限は「ゴールまでの距離 × hopRatio」。ただしこれより短くはしない
+  hopRatio: 1.5,
+  keepRatio: 0.5,
+  farShare: 0.25,                          // 掲示板のうち「遠ざかる便」の割合（残りは近づく便）                          // 1回の便で、ゴールまでの距離は最大でも半分までしか縮まない
+  earlySec: 25,                            // 最初のこの秒数は、ゴールの近く（earlyKm 以内）へ行く便を出さない
+  earlyKm: 2500,
+  boostAtSec: [35, 15],                    // 残りがこの秒数を切って遅れていたら、追い風便を 1便・2便 出す
+  maxZoom: 120,                            // 自動ズームの最大倍率（世界地図なので v1 より小さい）
+  flightKmMax: 12000,                      // この距離で飛行時間が最長になる
+  introMs: [700, 3600, 5600],              // 「出発地は……」演出：ルーレット開始・決定・離陸の時刻（ミリ秒）
+  slotsByTier: [0, 2, 4, 5, 6],            // 空港の規模ごとの、掲示板に出る便の数（tier 1〜4）。最大6択
+  maxBack: 1,                              // 来た道を戻る向きの便は、掲示板に最大この数まで
+  backCos: -0.5,                           // 向きのちがいが120度以上（cos < -0.5）なら「戻る向き」
+  rotateMsByTier: [0, 6000, 4500, 3000, 2000], // 便が入れ替わる間隔（ハブほど慌ただしい）
+  meshNeighbors: 3,                        // 白い網目：各空港を近い何か所とつなぐか
+  storageKey: 'kotoba-koku-v2-records',
+};
+
+// ---------------------------------------------------------------- 状態
+let DATA = null, WORDS = [], GOAL = null, LAND = null;
+const S = {
+  name: '', cur: null, route: [], legs: 0,
+  timeLeft: CONFIG.timeLimitSec, running: false, flying: null,
+  board: [], rotateTimer: null, lastTick: 0, ended: false, intro: null,
+};
+
+// ---------------------------------------------------------------- 便利関数
+const $ = (id) => document.getElementById(id);
+const km = (a, b) => {
+  const R = 6371, r = Math.PI / 180;
+  const x = Math.sin(((b.lat - a.lat) * r) / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(((b.lon - a.lon) * r) / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+};
+const fmtTime = (s) => { const d = Math.round(s * 10); return `${Math.floor(d / 600)}:${((d % 600) / 10).toFixed(1).padStart(4, '0')}`; };
+const fmtKm = (d) => (d < 10 ? d.toFixed(2) : d < 100 ? d.toFixed(1) : Math.round(d).toString());
+const streetView = (w) => `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${w.lat},${w.lon}`;
+const flightCode = (from, to) => {
+  let h = 2166136261;
+  for (const c of `${from.word}>${to.word}`) h = Math.imul(h ^ c.codePointAt(0), 16777619);
+  return 'KW' + String((h >>> 0) % 900 + 100);
+};
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// ---------------------------------------------------------------- 地図（メルカトル図法・自前）
+const VIEW = { lonMin: -180, lonMax: 180, latMin: -57, latMax: 76 };
+const merc = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+let PROJ = null;
+function fitProjection(w, h) {
+  const pad = 28;
+  const x0 = VIEW.lonMin, x1 = VIEW.lonMax, y0 = merc(VIEW.latMin), y1 = merc(VIEW.latMax);
+  const sx = (w - pad * 2) / ((x1 - x0) * Math.PI / 180), sy = (h - pad * 2) / (y1 - y0);
+  const s = Math.min(sx, sy);
+  const ox = (w - s * (x1 - x0) * Math.PI / 180) / 2, oy = (h - s * (y1 - y0)) / 2;
+  PROJ = (lat, lon) => [ox + s * (lon - x0) * Math.PI / 180, h - oy - s * (merc(lat) - y0)];
+}
+
+const base = $('base'), live = $('live');
+const bctx = base.getContext('2d'), lctx = live.getContext('2d');
+let DPR = 1, W = 0, H = 0, MESH = [], LAND_PATH = null;
+
+// ズームとパン：地図上の点 (x, y) は、画面では (x*k+tx, y*k+ty) に描く
+const V = { k: 1, tx: 0, ty: 0 };
+const scr = (p) => ({ x: p.x * V.k + V.tx, y: p.y * V.k + V.ty, word: p.word });
+let HOVER = null;           // マウスが指している空港
+let CAM = null;             // カメラの目標 { k: 拡大率, cx, cy: 画面の真ん中に来る地図上の点 }。null なら止まっている
+
+// 指定した空港がちょうど画面に収まるようにカメラを動かす
+function camFit(points, maxK = CONFIG.maxZoom) {
+  const xs = points.map((p) => p.x), ys = points.map((p) => p.y);
+  const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
+  const k = Math.max(1, Math.min(maxK, (W * 0.6) / (bw || 1), (H * 0.6) / (bh || 1)));
+  CAM = { k, cx: (Math.max(...xs) + Math.min(...xs)) / 2, cy: (Math.max(...ys) + Math.min(...ys)) / 2 };
+}
+const camHome = () => { CAM = { k: 1, cx: W / 2, cy: H / 2 }; };
+// 空港に着いたら：その空港を必ず地図の真ん中に。拡大の大きさは、ゴールが画面の中に入るくらいに合わせる
+function camCenter(w) {
+  const d = Math.hypot(GOAL.x - w.x, GOAL.y - w.y);
+  const k = Math.max(1, Math.min(CONFIG.maxZoom, (Math.min(W, H) * 0.42) / (d || 1e-6)));
+  CAM = { k, cx: w.x, cy: w.y };
+}
+
+// カメラを目標に向かって少しずつ近づける（毎フレーム呼ぶ）
+function stepCamera(dt) {
+  if (!CAM) return;
+  const a = 1 - Math.exp(-dt * 3.2);
+  const ccx = (W / 2 - V.tx) / V.k, ccy = (H / 2 - V.ty) / V.k;
+  const k = Math.exp(Math.log(V.k) + (Math.log(CAM.k) - Math.log(V.k)) * a);
+  const cx = ccx + (CAM.cx - ccx) * a, cy = ccy + (CAM.cy - ccy) * a;
+  V.k = k; V.tx = W / 2 - cx * k; V.ty = H / 2 - cy * k;
+  baseDirty = true;
+  if (Math.abs(Math.log(V.k / CAM.k)) < 0.002 && Math.hypot(cx - CAM.cx, cy - CAM.cy) * k < 0.5) {
+    V.k = CAM.k; V.tx = W / 2 - CAM.cx * CAM.k; V.ty = H / 2 - CAM.cy * CAM.k;
+    CAM = null;
+  }
+}
+let baseDirty = true;       // 下の地図を描き直す必要があるか
+
+function resize() {
+  const r = $('mapwrap').getBoundingClientRect();
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = r.width; H = r.height;
+  for (const c of [base, live]) { c.width = W * DPR; c.height = H * DPR; }
+  fitProjection(W, H);
+  for (const w of WORDS) [w.x, w.y] = PROJ(w.lat, w.lon);
+  Object.assign(V, { k: 1, tx: 0, ty: 0 });
+  buildLandPath();
+  buildMesh();
+  baseDirty = true;
+  // 画面の大きさが変わっても（スマホの回転など）、遊んでいる途中なら現在地に寄り直す
+  if (S.cur && S.running && !S.flying) camCenter(S.cur);
+}
+
+// 日本列島の形を一度だけ Path2D（図形データ）にしておく。ズームのたびに作り直さなくて済む
+function buildLandPath() {
+  LAND_PATH = null;
+  if (!LAND) return;
+  const p = new Path2D();
+  for (const f of LAND.features) {
+    const g = f.geometry; if (!g) continue;
+    const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+    for (const poly of polys) for (const ring of poly) {
+      ring.forEach(([lon, lat], i) => { const [x, y] = PROJ(lat, lon); i ? p.lineTo(x, y) : p.moveTo(x, y); });
+      p.closePath();
+    }
+  }
+  LAND_PATH = p;
+}
+
+function buildMesh() {
+  // 各空港を近いk か所とつなぐ → 白いポリゴンの網目に見える
+  const k = CONFIG.meshNeighbors, seen = new Set();
+  MESH = [];
+  const pts = WORDS;
+  for (let i = 0; i < pts.length; i++) {
+    const near = [];
+    for (let j = 0; j < pts.length; j++) {
+      if (i === j) continue;
+      const d = (pts[i].x - pts[j].x) ** 2 + (pts[i].y - pts[j].y) ** 2;
+      if (near.length < k) { near.push([d, j]); near.sort((a, b) => a[0] - b[0]); }
+      else if (d < near[k - 1][0]) { near[k - 1] = [d, j]; near.sort((a, b) => a[0] - b[0]); }
+    }
+    for (const [d, j] of near) {
+      const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+      if (!seen.has(key) && d < (Math.min(W, H) * 0.12) ** 2) { seen.add(key); MESH.push([pts[i], pts[j]]); }
+    }
+  }
+}
+
+function drawBase() {
+  const c = bctx;
+  c.setTransform(DPR, 0, 0, DPR, 0, 0);
+  c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+
+  // ここから下は「地図の座標」で描く（ズーム・パンを反映）。線の太さはズームしても変わらないよう 1/k にする
+  c.setTransform(DPR * V.k, 0, 0, DPR * V.k, DPR * V.tx, DPR * V.ty);
+  const px = 1 / V.k;
+
+  // 経緯線のグリッド
+  c.strokeStyle = 'rgba(80,140,255,0.08)'; c.lineWidth = px;
+  c.beginPath();
+  for (let lon = -180; lon <= 180; lon += 30) { const [x1, y1] = PROJ(VIEW.latMin, lon), [x2, y2] = PROJ(VIEW.latMax, lon); c.moveTo(x1, y1); c.lineTo(x2, y2); }
+  for (let lat = -45; lat <= 75; lat += 15) { const [x1, y1] = PROJ(lat, VIEW.lonMin), [x2, y2] = PROJ(lat, VIEW.lonMax); c.moveTo(x1, y1); c.lineTo(x2, y2); }
+  c.stroke();
+
+  // 陸地：日本列島を青く塗る（点が日本のどこにあるか分かるように）
+  if (LAND_PATH) {
+    c.save();
+    c.shadowColor = 'rgba(40,110,255,0.55)'; c.shadowBlur = CAM ? 0 : 18;
+    c.fillStyle = '#0a2a6e'; c.fill(LAND_PATH);
+    c.restore();
+    c.strokeStyle = 'rgba(110,170,255,0.55)'; c.lineWidth = 0.7 * px; c.stroke(LAND_PATH);
+  }
+
+  // 白い網目
+  c.strokeStyle = 'rgba(255,255,255,0.10)'; c.lineWidth = 0.6 * px;
+  c.beginPath();
+  for (const [a, b] of MESH) { c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); }
+  c.stroke();
+
+  // 空港（規模で大きさを変える）。点の大きさは画面上で一定、ズームすると少しだけ大きく
+  c.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const grow = Math.min(2, Math.sqrt(V.k));
+  for (const w of WORDS) {
+    const p = scr(w);
+    if (p.x < -10 || p.y < -10 || p.x > W + 10 || p.y > H + 10) continue;
+    const r = [0, 1.1, 1.5, 2.0, 2.8][w.tier] * grow;
+    c.fillStyle = w.tier === 4 ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.7)';
+    c.beginPath(); c.arc(p.x, p.y, r, 0, Math.PI * 2); c.fill();
+  }
+  // かなり拡大したら、言葉の名前も小さく出す
+  if (V.k >= 4) {
+    c.font = '11px "Noto Sans JP", sans-serif'; c.fillStyle = 'rgba(255,255,255,0.55)';
+    // 名前同士が重なる場所では、大きい空港の名前を優先して出す
+    const taken = new Set();
+    const order = WORDS.slice().sort((a, b) => b.tier - a.tier);
+    for (const w of order) {
+      const p = scr(w);
+      if (p.x < 0 || p.y < 0 || p.x > W || p.y > H) continue;
+      const tw = c.measureText(w.word).width;
+      const cells = [];
+      for (let gx = Math.floor((p.x + 4) / 24); gx <= Math.floor((p.x + 4 + tw) / 24); gx++) cells.push(gx + ',' + Math.floor((p.y - 10) / 14));
+      if (cells.some((k) => taken.has(k))) continue;
+      cells.forEach((k) => taken.add(k));
+      c.fillText(w.word, p.x + 4, p.y - 4);
+    }
+  }
+  baseDirty = false;
+}
+
+function arcPoint(a, b, t) {
+  // 2点を結ぶ弧（少し持ち上げた二次ベジェ）
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+  const lift = Math.min(160, len * 0.35);
+  let nx = -dy / len, ny = dx / len;
+  if (ny > 0) { nx = -nx; ny = -ny; } // 常に画面の上側へふくらませる
+  const cx = mx + nx * lift, cy = my + ny * lift;
+  const u = 1 - t;
+  return [u * u * a.x + 2 * u * t * cx + t * t * b.x, u * u * a.y + 2 * u * t * cy + t * t * b.y];
+}
+
+const BLUE = '#4fc3ff', BLUE_GLOW = 'rgba(79,195,255,1)';
+
+function strokeArc(c, a, b, upto = 1) {
+  c.beginPath();
+  for (let s = 0; s <= upto + 0.0001; s += 0.02) { const [x, y] = arcPoint(a, b, Math.min(s, upto)); s ? c.lineTo(x, y) : c.moveTo(x, y); }
+  c.stroke();
+}
+
+function drawLive(now) {
+  if (baseDirty) drawBase();
+  const c = lctx;
+  c.setTransform(DPR, 0, 0, DPR, 0, 0);
+  c.clearRect(0, 0, W, H);
+  if (!GOAL) return;
+
+  // 通ってきた航路（遊んでいる間は青い点線、終わったら光らせる）
+  if (S.ended && S.showRoute) drawRouteGlow(c, now);
+  else {
+    c.strokeStyle = 'rgba(120,210,255,0.85)'; c.lineWidth = 1.8; c.setLineDash([5, 4]);
+    for (let i = 1; i < S.route.length; i++) strokeArc(c, scr(S.route[i - 1]), scr(S.route[i]));
+    c.setLineDash([]);
+  }
+
+  // ゴール（言葉界の成田空港）
+  const pulse = (Math.sin(now / 300) + 1) / 2;
+  const g = scr(GOAL);
+  c.strokeStyle = '#fff'; c.lineWidth = 1.5;
+  c.beginPath(); c.arc(g.x, g.y, 7 + pulse * 6, 0, Math.PI * 2); c.stroke();
+  c.beginPath(); c.moveTo(g.x - 14, g.y); c.lineTo(g.x + 14, g.y); c.moveTo(g.x, g.y - 14); c.lineTo(g.x, g.y + 14); c.stroke();
+  label(c, g.x + 12, g.y - 10, `GOAL ${GOAL.word}`);
+
+  // 現在地
+  if (S.cur && !S.flying && !S.intro && !S.ended) {
+    const p = scr(S.cur);
+    c.fillStyle = '#fff';
+    c.beginPath(); c.arc(p.x, p.y, 5, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = 'rgba(255,255,255,0.6)';
+    c.beginPath(); c.arc(p.x, p.y, 10 + pulse * 4, 0, Math.PI * 2); c.stroke();
+    label(c, p.x + 12, p.y + 16, S.cur.word);
+  }
+
+  // 飛行中の機体：これから飛ぶ道をうっすら、飛んだ分を光る青で描く
+  if (S.flying) {
+    const { to, t0 } = S.flying;
+    const from = scr(S.flying.from), dest = scr(to);
+    const t = Math.min(1, (now - t0) / S.flying.ms);
+    const e = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+    c.strokeStyle = 'rgba(120,210,255,0.45)'; c.lineWidth = 1; c.setLineDash([2, 4]);
+    strokeArc(c, from, dest);
+    c.setLineDash([]);
+    c.save();
+    c.shadowColor = BLUE_GLOW; c.shadowBlur = 12;
+    c.strokeStyle = BLUE; c.lineWidth = 4;
+    strokeArc(c, from, dest, e);
+    c.restore();
+    c.strokeStyle = '#e6f6ff'; c.lineWidth = 1.4;
+    strokeArc(c, from, dest, e);
+    c.fillStyle = BLUE;
+    c.beginPath(); c.arc(dest.x, dest.y, 3 + pulse * 3, 0, Math.PI * 2); c.fill();
+    const [px, py] = arcPoint(from, dest, e), [qx, qy] = arcPoint(from, dest, Math.min(1, e + 0.01));
+    c.save(); c.translate(px, py); c.rotate(Math.atan2(qy - py, qx - px));
+    c.shadowColor = BLUE_GLOW; c.shadowBlur = 10;
+    c.fillStyle = '#fff'; c.beginPath(); c.moveTo(9, 0); c.lineTo(-6, -5); c.lineTo(-3, 0); c.lineTo(-6, 5); c.closePath(); c.fill();
+    c.restore();
+    label(c, px + 10, py - 10, `${to.word} 行き`);
+    $('hud-dist').textContent = `${fmtKm(S.flying.from.distGoalKm + (to.distGoalKm - S.flying.from.distGoalKm) * e)} km`;
+    if (t >= 1) land(to);
+  }
+
+  // 「出発地は……」ルーレット中に光っている空港
+  if (S.intro?.spot) {
+    const p = scr(S.intro.spot), d = S.intro.decided;
+    c.save(); c.shadowColor = BLUE_GLOW; c.shadowBlur = 16;
+    c.fillStyle = d ? '#fff' : BLUE;
+    c.beginPath(); c.arc(p.x, p.y, d ? 7 : 5, 0, Math.PI * 2); c.fill();
+    c.restore();
+    c.strokeStyle = d ? '#fff' : BLUE; c.lineWidth = 1.5;
+    c.beginPath(); c.arc(p.x, p.y, (d ? 14 : 10) + pulse * 6, 0, Math.PI * 2); c.stroke();
+  }
+
+  // マウスが指している空港の名前と住所
+  if (HOVER) {
+    const p = scr(HOVER);
+    c.strokeStyle = BLUE; c.lineWidth = 1.5;
+    c.beginPath(); c.arc(p.x, p.y, 7, 0, Math.PI * 2); c.stroke();
+    tooltip(c, p.x + 12, p.y - 14, HOVER.word, HOVER.address || '', HOVER.desc || '');
+  }
+}
+
+function label(c, x, y, text) {
+  c.font = '700 12px "Noto Sans JP", sans-serif';
+  const w = c.measureText(text).width;
+  if (x + w + 8 > W) x = W - w - 8;
+  c.fillStyle = 'rgba(0,0,0,0.75)'; c.fillRect(x - 4, y - 12, w + 8, 17);
+  c.fillStyle = '#fff'; c.fillText(text, x, y);
+}
+
+// 文字数で折り返す（日本語は単語の区切りがないので1文字ずつ測る）
+function wrapText(c, text, maxW) {
+  const lines = []; let line = '';
+  for (const ch of text) {
+    if (c.measureText(line + ch).width > maxW && line) { lines.push(line); line = ch; } else line += ch;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function tooltip(c, x, y, title, sub, desc = '') {
+  const DESC_W = Math.min(260, W * 0.6);
+  c.font = '900 15px "Noto Sans JP", sans-serif';
+  const w1 = c.measureText(title).width;
+  c.font = '11px "Noto Sans JP", sans-serif';
+  const w2 = c.measureText(sub).width;
+  c.font = '12px "Noto Sans JP", sans-serif';
+  const lines = desc ? wrapText(c, desc, DESC_W) : [];
+  const w3 = lines.length ? Math.max(...lines.map((l) => c.measureText(l).width)) : 0;
+  const w = Math.max(w1, w2, w3) + 16, h = (sub ? 42 : 26) + (lines.length ? lines.length * 17 + 6 : 0);
+  if (x + w > W - 4) x = x - w - 24;
+  if (x < 12) x = 12;
+  if (y + h - 16 > H - 4) y = H - 4 - h + 16;
+  if (y - 16 < 4) y = 20;
+  c.fillStyle = 'rgba(0,8,30,0.94)'; c.fillRect(x - 8, y - 16, w, h);
+  c.strokeStyle = BLUE; c.lineWidth = 1; c.strokeRect(x - 8 + 0.5, y - 16 + 0.5, w - 1, h - 1);
+  c.fillStyle = '#fff'; c.font = '900 15px "Noto Sans JP", sans-serif'; c.fillText(title, x, y);
+  if (sub) { c.fillStyle = '#9fc2ff'; c.font = '11px "Noto Sans JP", sans-serif'; c.fillText(sub, x, y + 18); }
+  c.fillStyle = '#e8eefc'; c.font = '12px "Noto Sans JP", sans-serif';
+  lines.forEach((l, i) => c.fillText(l, x, y + (sub ? 18 : 0) + 22 + i * 17));
+}
+
+// ---------------------------------------------------------------- マウス操作（ホバー・ズーム・ドラッグ）
+function nearestWord(mx, my, maxPx = 14) {
+  let best = null, bd = maxPx * maxPx;
+  for (const w of WORDS) {
+    const p = scr(w), d = (p.x - mx) ** 2 + (p.y - my) ** 2;
+    if (d < bd) { bd = d; best = w; }
+  }
+  return best;
+}
+
+function zoomAt(mx, my, factor) {
+  const k = Math.max(1, Math.min(CONFIG.maxZoom, V.k * factor));
+  const f = k / V.k;
+  V.tx = mx - (mx - V.tx) * f; V.ty = my - (my - V.ty) * f; V.k = k;
+  clampView();
+  baseDirty = true;
+}
+function clampView() {
+  // 日本が画面の外に飛んでいかないように
+  if (V.k === 1) { V.tx = 0; V.ty = 0; return; }
+  V.tx = Math.min(W * 0.5, Math.max(W * 0.5 - W * V.k, V.tx));
+  V.ty = Math.min(H * 0.5, Math.max(H * 0.5 - H * V.k, V.ty));
+}
+
+function setupPointer() {
+  const el = $('mapwrap');
+  const pos = (e) => { const r = el.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  let drag = null;
+  const touches = new Map();
+  let pinch = null;
+
+  el.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    CAM = null;
+    const [mx, my] = pos(e);
+    zoomAt(mx, my, Math.exp(-e.deltaY * 0.0015));
+  }, { passive: false });
+
+  el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('#hud-top, #airport-card')) return;
+    touches.set(e.pointerId, pos(e));
+    el.setPointerCapture(e.pointerId);
+    if (touches.size === 2) {
+      const [a, b] = [...touches.values()];
+      pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) };
+      drag = null;
+    } else {
+      const [mx, my] = pos(e);
+      drag = { x: mx, y: my, tx: V.tx, ty: V.ty, moved: false };
+    }
+  });
+  el.addEventListener('pointermove', (e) => {
+    const [mx, my] = pos(e);
+    if (touches.has(e.pointerId)) touches.set(e.pointerId, [mx, my]);
+    if (pinch && touches.size === 2) {
+      const [a, b] = [...touches.values()];
+      const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      zoomAt((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, d / pinch.d);
+      pinch.d = d;
+      return;
+    }
+    if (drag) {
+      const dx = mx - drag.x, dy = my - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+      if (drag.moved) CAM = null;
+      if (drag.moved && V.k > 1) { V.tx = drag.tx + dx; V.ty = drag.ty + dy; clampView(); baseDirty = true; }
+    }
+    HOVER = nearestWord(mx, my, e.pointerType === 'touch' ? 24 : 14);
+    el.style.cursor = drag?.moved && V.k > 1 ? 'grabbing' : HOVER ? 'pointer' : V.k > 1 ? 'grab' : 'default';
+  });
+  const up = (e) => {
+    touches.delete(e.pointerId);
+    if (touches.size < 2) pinch = null;
+    if (drag && !drag.moved) {
+      // タップ／クリック：一番近い空港の名前を出す（スマホ用）
+      const [mx, my] = pos(e);
+      HOVER = nearestWord(mx, my, e.pointerType === 'touch' ? 24 : 14);
+    }
+    drag = null;
+  };
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+  el.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') HOVER = null; });
+  el.addEventListener('dblclick', camHome);
+
+}
+
+// ---------------------------------------------------------------- ゲーム進行
+function loop(now) {
+  const dt = Math.min(0.1, (now - S.lastTick) / 1000);
+  stepCamera(dt);
+  if (S.intro) stepIntro(now);
+  if (S.running && !S.ended) {
+    S.timeLeft = Math.max(0, S.timeLeft - dt);
+    if (S.timeLeft <= 0) endGame(false);
+  }
+  S.lastTick = now;
+  $('hud-time').textContent = fmtTime(S.timeLeft);
+  $('hud-time').classList.toggle('warn', S.running && S.timeLeft < 15);
+  drawLive(now);
+  requestAnimationFrame(loop);
+}
+
+function startGame() {
+  hideReveal();
+  S.name = $('name').value.trim() || 'NO NAME';
+  const candidates = WORDS.filter((w) => w !== GOAL && w.distGoalKm > DATA.startExcludeKm && w.flights.length && REACHABLE.has(w.id));
+  const start = pick(candidates.length ? candidates : WORDS);
+  Object.assign(S, { cur: start, route: [start], legs: 0, timeLeft: CONFIG.timeLimitSec, running: false, flying: null, ended: false, showRoute: null });
+  $('hud-name').textContent = S.name;
+  $('hud-legs').textContent = 0;
+  $('hud-dist').textContent = '— km';
+  $('screen-start').classList.add('hidden');
+  $('screen-brief').classList.add('hidden');
+  $('screen-end').classList.add('hidden');
+  clearInterval(S.rotateTimer);
+  $('flights').innerHTML = ''; $('board-foot').textContent = '';
+  showPhoto(null);
+  $('here-word').textContent = '……'; $('here-addr').textContent = '出発地を抽選中'; $('here-desc').textContent = '';
+  $('here-meta').textContent = ''; $('board-total').textContent = '';
+  $('here-sv').removeAttribute('href');
+  startIntro(performance.now(), start);
+}
+
+// ---------------------------------------------------------------- 搭乗前の説明（スキップできる）
+function briefPages() {
+  const g = GOAL;
+  return [
+    { title: 'ルール', html: `<ul class="brief-list">
+      <li>言葉界の成田空港<b>「${esc(g.word)}」</b>を目指す。</li>
+      <li><b>出発便</b>から行き先を選んで、言葉から言葉へ乗り継ぐ。</li>
+      <li>制限時間は<b>${CONFIG.timeLimitSec}秒</b>。</li>
+      <li>時間切れのとき、ゴールに一番近い人が勝ち。</li>
+    </ul>` },
+    { title: '言葉の住所', html: `<p class="brief-big">言葉たちに、空港を当てはめました。</p>` },
+  ];
+}
+let BRIEF_PAGE = 0;
+function showBrief() {
+  BRIEF_PAGE = 0;
+  $('screen-start').classList.add('hidden');
+  $('screen-brief').classList.remove('hidden');
+  renderBrief();
+}
+function renderBrief() {
+  const pages = briefPages(), p = pages[BRIEF_PAGE];
+  $('brief-step').textContent = `${BRIEF_PAGE + 1} / ${pages.length}`;
+  $('brief-title').textContent = p.title;
+  $('brief-body').innerHTML = p.html;
+  $('brief-next').textContent = BRIEF_PAGE === pages.length - 1 ? '出発する ▶' : '次へ ▶';
+}
+function finishBrief() {
+  $('screen-brief').classList.add('hidden');
+  startGame();
+}
+
+// ---------------------------------------------------------------- 「出発地は……」の演出
+// ルーレットのように言葉が次々に光り、だんだん遅くなって出発地が決まる → そこへズーム → 離陸
+function startIntro(now, start) {
+  const [t1, t2] = CONFIG.introMs;
+  const times = [];
+  for (let t = t1, gap = 55; t < t2 - 250; gap *= 1.13) { times.push(t); t += gap; }
+  const pool = WORDS.filter((w) => w !== start && w !== GOAL);
+  S.intro = { t0: now, start, times, words: times.map(() => pick(pool)), shown: -1, decided: false, spot: null };
+  camHome();
+  $('intro').classList.remove('hidden', 'decided', 'go');
+  $('intro-lead').textContent = '出発地は……';
+  $('intro-word').textContent = '';
+  $('intro-addr').textContent = '';
+}
+
+function stepIntro(now) {
+  const I = S.intro, t = now - I.t0;
+  const [, t2, t3] = CONFIG.introMs;
+  if (t < t2) {
+    let i = -1;
+    while (i + 1 < I.times.length && I.times[i + 1] <= t) i++;
+    if (i !== I.shown && i >= 0) {
+      I.shown = i; I.spot = I.words[i];
+      $('intro-word').textContent = I.spot.word;
+      $('intro-addr').textContent = I.spot.pref || '';
+    }
+  } else if (!I.decided) {
+    I.decided = true; I.spot = I.start;
+    $('intro').classList.add('decided');
+    $('intro-word').textContent = I.start.word;
+    $('intro-addr').textContent = I.start.address;
+    camCenter(I.start);
+  } else if (t >= t3) {
+    S.intro = null;
+    $('intro').classList.add('go');
+    setTimeout(() => $('intro').classList.add('hidden'), 500);
+    S.running = true;
+    $('btn-quit').hidden = false;
+    arrive(I.start);
+  }
+}
+
+// ---------------------------------------------------------------- 空港の写真（その場で Wikipedia から取ってくる）
+// データには空港の記事名だけが入っている。写真は、着いたときに遊んでいる人のブラウザが取りに行く。
+// 自由に使えるライセンスの写真だけ（Wikipedia の pageimages は標準で free のみを返す）
+// 選び方：
+//   ① その空港の Wikimedia Commons 専用カテゴリ（記事 → Wikidata の「Commons のカテゴリ」）から、
+//      ターミナルの中・外観らしい写真を優先して選ぶ（空撮・地図・ロゴは除く）。Commons の写真はすべて自由ライセンス
+//   ② カテゴリがなければ、英語版記事の代表写真
+// 同じ空港は一度だけ取りに行く（取りに行っている途中の分も共有する）
+const PHOTO_CACHE = new Map();
+const PHOTO_GOOD = /terminal|interior|inside|hall|check.?in|departure|arrival|lounge|concourse|gate|lobby|entrance|exterior|facade|building|front/i;
+const PHOTO_BEST = /interior|inside|hall|check.?in|departure|lounge|concourse|lobby/i;
+const PHOTO_BAD = /aerial|from.?above|satellite|usgs|orthophoto|map|logo|diagram|chart|\.svg|\.pdf|\.tif|plan\b|locator|seal|flag|ticket|boarding.?pass|stamp/i;
+const wikiApi = async (host, params) =>
+  (await fetch(`https://${host}/w/api.php?` + new URLSearchParams({ format: 'json', formatversion: 2, origin: '*', ...params }))).json();
+function getPhoto(title) {
+  if (!PHOTO_CACHE.has(title)) PHOTO_CACHE.set(title, findPhoto(title).catch(() => null));
+  return PHOTO_CACHE.get(title);
+}
+async function findPhoto(title) {
+  const a = await wikiApi('en.wikipedia.org', { action: 'query', redirects: 1, titles: title,
+    prop: 'pageprops|pageimages', ppprop: 'wikibase_item', piprop: 'thumbnail|name', pithumbsize: 480 });
+  const page = a.query?.pages?.[0];
+  const lead = page?.thumbnail?.source ? { src: page.thumbnail.source, page: 'https://en.wikipedia.org/wiki/File:' + encodeURIComponent(page.pageimage ?? '') } : null;
+  // ① Commons の専用カテゴリから（どこかで失敗しても ② の代表写真には進む）
+  const qid = page?.pageprops?.wikibase_item;
+  if (!qid) return lead;
+  const toPhoto = (p) => (p?.imageinfo?.[0]?.thumburl ? { src: p.imageinfo[0].thumburl, page: 'https://commons.wikimedia.org/wiki/' + encodeURIComponent(p.title) } : null);
+  const usable = (pages) => (pages ?? []).filter((p) => /image\/(jpeg|png)/.test(p.imageinfo?.[0]?.mime ?? '') && !PHOTO_BAD.test(p.title));
+  const touristy = (files) => files.filter((p) => PHOTO_GOOD.test(p.title))
+    .sort((x, y) => (PHOTO_BEST.test(y.title) ? 1 : 0) - (PHOTO_BEST.test(x.title) ? 1 : 0) || (x.index ?? 0) - (y.index ?? 0));
+  let cat = null, files = [];
+  try {
+    const e = await wikiApi('www.wikidata.org', { action: 'wbgetclaims', entity: qid, property: 'P373' });
+    cat = e.claims?.P373?.[0]?.mainsnak?.datavalue?.value ?? null;
+  } catch {}
+  if (!cat) return lead ?? (await cityPhoto(qid));
+  // 1) 専用カテゴリ直下で、ファイル名がターミナル・中・外観らしい写真
+  try {
+    const f = await wikiApi('commons.wikimedia.org', { action: 'query', generator: 'categorymembers', gcmtitle: 'Category:' + cat,
+      gcmtype: 'file', gcmlimit: 200, prop: 'imageinfo', iiprop: 'url|mime', iiurlwidth: 480 });
+    files = usable(f.query?.pages);
+    const pick1 = touristy(files)[0];
+    if (pick1) return toPhoto(pick1);
+  } catch {}
+  // 2) サブカテゴリ（「ターミナル1」「ターミナルの中」など）まで探す。ファイル名で確かめるので関係ない写真は弾く
+  try {
+    const s = await wikiApi('commons.wikimedia.org', { action: 'query', generator: 'search', gsrnamespace: 6, gsrlimit: 30,
+      gsrsearch: `deepcategory:"${cat}" filetype:bitmap terminal OR interior OR lounge OR hall OR departure OR concourse OR check-in OR entrance OR building`,
+      prop: 'imageinfo', iiprop: 'url|mime', iiurlwidth: 480 });
+    const pick2 = touristy(usable(s.query?.pages))[0];
+    if (pick2) return toPhoto(pick2);
+  } catch {}
+  // 3) 記事の代表写真 → 4) 専用カテゴリにある、ほかの写真
+  return lead ?? toPhoto(files[0]) ?? (await cityPhoto(qid));
+}
+// 5) 空港の写真がまったくないとき：空港のある街の写真（Wikidata：空港の P931「結んでいる場所」→ その街の P18「画像」）
+async function cityPhoto(qid) {
+  try {
+    const fromFile = (file, note) => ({ src: 'https://commons.wikimedia.org/wiki/Special:FilePath/' + encodeURIComponent(file) + '?width=480',
+      page: 'https://commons.wikimedia.org/wiki/File:' + encodeURIComponent(file), note });
+    // （空港自身の Wikidata 画像は、別の空港の写真や地図が付いていることがあったので使わない）
+    const c = await wikiApi('www.wikidata.org', { action: 'wbgetclaims', entity: qid, property: 'P931' });
+    const city = c.claims?.P931?.[0]?.mainsnak?.datavalue?.value?.id;
+    if (!city) return null;
+    const e = await wikiApi('www.wikidata.org', { action: 'wbgetentities', ids: city, props: 'claims|labels', languages: 'ja|en' });
+    const ent = e.entities?.[city];
+    const file = ent?.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
+    const name = ent?.labels?.ja?.value ?? ent?.labels?.en?.value ?? '';
+    return file && /\.jpe?g$/i.test(file) && !PHOTO_BAD.test(file) ? fromFile(file, `空港のある街：${name}`) : null;   // 写真（JPEG）だけ。地図の画像は除く
+  } catch { return null; }
+}
+// 写真の枠はいつも出しておき（写真がないときは ✈ の印）、写真が届いたら差し替える
+function showPhoto(w) {
+  const img = $('here-photo-img'), credit = $('here-photo-credit');
+  img.hidden = true; credit.hidden = true;
+  $('here-photo').classList.remove('has-img');
+  S.photoFor = w;
+  if (!w?.wiki) return;
+  getPhoto(w.wiki).then((p) => {
+    if (S.photoFor !== w || !p) return;   // 写真が届く前に別の空港へ飛んだら出さない
+    img.onload = () => { if (S.photoFor !== w) return; img.hidden = false; credit.hidden = false; $('here-photo').classList.add('has-img'); };
+    img.src = p.src; img.alt = w.airport;
+    credit.href = p.page;
+    // 街の写真のときは、空港の写真ではないことが分かるように書く
+    credit.textContent = p.note ? `${p.note}（写真：Wikimedia Commons）` : '写真：Wikimedia Commons';
+  });
+}
+
+function arrive(w) {
+  showPhoto(w);
+  S.cur = w;
+  $('here-word').textContent = w.word;
+  $('here-addr').textContent = w.address || '—';
+  $('here-desc').textContent = w.desc || '';
+  const coin = COINCIDENCE_NOTE[w.word];
+  $('here-coin').hidden = !coin;
+  if (coin) $('here-coin').innerHTML = `<b>偶然の一致！</b> ${esc(coin)}`;
+  $('here-sv').href = streetView(w);
+  $('here-meta').textContent = `${w.iata} ・ ${['', '地方空港', '中規模空港', '拠点空港', 'ハブ空港'][w.tier]}`;
+  $('board-total').textContent = `本日の発着 ${w.linksTotal}便`;
+  $('hud-dist').textContent = `${fmtKm(w.distGoalKm)} km`;
+  $('hud-legs').textContent = S.legs;
+  if (w === GOAL) return endGame(true);
+  setupBoard(w);
+}
+
+// ---------------------------------------------------------------- 掲示板に出す便を選ぶ
+// ・ゴールに近づくほど、便の飛距離は短くなる（最後は細かく刻む）
+// ・最初のうちは、ゴールの近く（日本のあたり）へ一気に行く便は出さない
+// ・時間がないのに進んでいないときは、ゴールへ大きく近づく「追い風便」が出る（マリオカートの救済のように）
+// ・それ以外は、ほとんどが「近づく便」。「遠ざかる便」は4分の1だけ
+const hopKm = (a, b) => km(a, b);
+function flightPools(w) {
+  const elapsed = CONFIG.timeLimitSec - S.timeLeft;
+  const hopCap = Math.max(CONFIG.hopMinKm, w.distGoalKm * CONFIG.hopRatio);
+  const floorKm = Math.max(w.distGoalKm * CONFIG.keepRatio, elapsed < CONFIG.earlySec && w.distGoalKm > CONFIG.earlyKm ? CONFIG.earlyKm : 0);
+  const all = w.flights.map((id) => WORDS_BY_ID[id]);
+  const near = all.filter((x) => x.distGoalKm < w.distGoalKm && x.distGoalKm >= floorKm && hopKm(w, x) <= hopCap);
+  const far = all.filter((x) => x.distGoalKm >= w.distGoalKm && hopKm(w, x) <= hopCap);
+  // 条件に合う便が足りないときの予備。予備も序盤の制限は守り、飛距離は上限の2倍まで
+  //   近づく便は「近づき方が小さい順」、遠ざかる便は「近い順」
+  const earlyFloor = elapsed < CONFIG.earlySec && w.distGoalKm > CONFIG.earlyKm ? CONFIG.earlyKm : 0;
+  const nearSpare = all.filter((x) => x.distGoalKm < w.distGoalKm && x.distGoalKm >= earlyFloor && hopKm(w, x) <= hopCap * 2 && !near.includes(x))
+    .sort((p, q) => q.distGoalKm - p.distGoalKm);
+  const farSpare = all.filter((x) => x.distGoalKm >= w.distGoalKm && hopKm(w, x) <= hopCap * 2 && !far.includes(x))
+    .sort((p, q) => hopKm(w, p) - hopKm(w, q));
+  // それでも2便に満たないときだけ、近い順に足す（行き止まりを防ぐ）
+  const lastResort = all.filter((x) => ![...near, ...far, ...nearSpare, ...farSpare].includes(x)).sort((p, q) => hopKm(w, p) - hopKm(w, q));
+  if (near.length + far.length + nearSpare.length + farSpare.length < 2) farSpare.push(...lastResort.slice(0, 2));
+  return { near, far, nearSpare, farSpare };
+}
+// 遅れているか：経過した時間の割合に比べて、ゴールへの近づき方が足りないとき、追い風便の数を返す
+function boostCount() {
+  const start = S.route[0]?.distGoalKm ?? S.cur.distGoalKm;
+  const progress = 1 - S.cur.distGoalKm / start;
+  const timeFrac = 1 - S.timeLeft / CONFIG.timeLimitSec;
+  const behind = progress < timeFrac * 0.8;
+  if (!behind || S.cur === GOAL) return 0;
+  const [t1, t2] = CONFIG.boostAtSec;
+  return S.timeLeft < t2 ? 2 : S.timeLeft < t1 ? 1 : 0;
+}
+// 追い風便：今いる言葉の便の中で、ゴールへ一番大きく近づくもの（飛距離・序盤の制限は無視）
+function boostFlights(w, n, exclude) {
+  return w.flights.map((id) => WORDS_BY_ID[id]).filter((x) => x.distGoalKm < w.distGoalKm && !exclude.has(x))
+    .sort((p, q) => p.distGoalKm - q.distGoalKm).slice(0, n);
+}
+
+// 来た道を戻る向きか：ひとつ前の空港 → 今の空港 の向きと、今の空港 → 行き先 の向きが 120度以上ちがう
+function isBack(w, x) {
+  const prev = S.route.length >= 2 ? S.route[S.route.length - 2] : null;
+  if (!prev || prev === w) return false;
+  const ax = w.x - prev.x, ay = w.y - prev.y, bx = x.x - w.x, by = x.y - w.y;
+  const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+  if (!la || !lb) return false;
+  return (ax * bx + ay * by) / (la * lb) < CONFIG.backCos;
+}
+
+function setupBoard(w) {
+  clearInterval(S.rotateTimer);
+  const slots = Math.min(CONFIG.slotsByTier[w.tier], w.flights.length);
+  const shuffle = (a) => a.sort(() => Math.random() - 0.5);
+  const P = flightPools(w);
+  shuffle(P.near); shuffle(P.far);
+  // 来た道を戻る向きの便は後回し（足りないときだけ使う）
+  const backLast = (a) => [...a.filter((x) => !isBack(w, x)), ...a.filter((x) => isBack(w, x))];
+  const nearList = backLast([...P.near, ...P.nearSpare]), farList = backLast([...P.far, ...P.farSpare]);
+  // 遠ざかる便は4分の1だけ。残りは近づく便（足りなければもう一方で埋める）
+  let nFar = Math.min(farList.length, Math.floor(slots * CONFIG.farShare));
+  let nNear = Math.min(nearList.length, slots - nFar);
+  nFar = Math.min(farList.length, slots - nNear);
+  S.board = [...farList.slice(0, nFar), ...nearList.slice(0, nNear)];
+  // 戻る向きの便は掲示板に最大1便まで（便が2つ未満になるときは残す）
+  const back = S.board.filter((x) => isBack(w, x));
+  for (const x of back.slice(CONFIG.maxBack)) if (S.board.length > 2) S.board.splice(S.board.indexOf(x), 1);
+  shuffle(S.board);
+  S.boost = new Set();
+  applyBoost(w);
+  renderBoard(-1);
+  $('board-foot').textContent = w.flights.length > slots ? '便は随時入れ替わります' : '';
+  if (w.flights.length > slots || boostCount() < 2) {
+    S.rotateTimer = setInterval(() => {
+      if (S.flying || S.ended || !S.running) return;
+      if (applyBoost(w)) return renderBoard(-1);           // 遅れてきたら、入れ替えのタイミングで追い風便を出す
+      if (w.flights.length <= slots) return;
+      const shown = new Set(S.board);
+      const i = Math.floor(Math.random() * S.board.length);
+      if (S.boost.has(S.board[i])) return;                  // 追い風便は消さない
+      const Q = flightPools(w);
+      const far = S.board[i].distGoalKm >= w.distGoalKm;
+      // 入れ替えるときは、同じ側（近づく／遠ざかる）の便と交代させて、半分ずつを保つ
+      let same = (far ? [...Q.far, ...Q.farSpare.slice(0, 2)] : [...Q.near, ...Q.nearSpare.slice(0, 2)]).filter((x) => !shown.has(x));
+      // 戻る向きの便は、掲示板に1便までに保つ
+      const backShown = S.board.filter((x, j) => j !== i && isBack(w, x)).length;
+      if (backShown >= CONFIG.maxBack) same = same.filter((x) => !isBack(w, x));
+      if (!same.length) return;
+      S.board[i] = pick(same);
+      renderBoard(i);
+    }, CONFIG.rotateMsByTier[w.tier]);
+  }
+}
+// 追い風便を掲示板に入れる（足りない分だけ、遠ざかる便と入れ替える）。入れたら true
+function applyBoost(w) {
+  const need = boostCount() - S.boost.size;
+  if (need <= 0) return false;
+  const add = boostFlights(w, need, new Set([...S.boost]));
+  let changed = false;
+  for (const x of add) {
+    if (S.board.includes(x)) { S.boost.add(x); changed = true; continue; }
+    let i = S.board.findIndex((y) => !S.boost.has(y) && y.distGoalKm >= w.distGoalKm);
+    if (i < 0) i = S.board.findIndex((y) => !S.boost.has(y));
+    if (i < 0) break;
+    S.board[i] = x; S.boost.add(x); changed = true;
+  }
+  return changed;
+}
+
+function renderBoard(newIndex) {
+  const ol = $('flights');
+  ol.innerHTML = '';
+  S.board.forEach((to, i) => {
+    const li = document.createElement('li');
+    if (i === newIndex) li.className = 'new';
+    const boost = S.boost?.has(to);
+    if (boost) li.classList.add('boost');
+    li.innerHTML = `<button><span class="code">${flightCode(S.cur, to)}</span><span class="dest">${esc(to.word)} 行き</span><span class="stat">${boost ? '追い風' : 'BOARDING'}</span></button>`;
+    li.querySelector('button').addEventListener('click', () => takeFlight(to));
+    ol.appendChild(li);
+    // 行き先の写真を先に取りに行っておく（着いた瞬間に出せるように）。
+    // Wikipedia に負担をかけないよう、掲示板が新しく出たときの最初の2便だけ
+    if (newIndex === -1 && i < 2 && to.wiki) getPhoto(to.wiki).then((p) => { if (p) new Image().src = p.src; });
+  });
+}
+
+function takeFlight(to) {
+  if (S.flying || S.ended) return;
+  clearInterval(S.rotateTimer);
+  document.querySelectorAll('#flights button').forEach((b) => (b.disabled = true));
+  // 長く飛ぶほど時間がかかる（flightKmMax で最長）
+  const [msMin, msMax] = CONFIG.flightMs;
+  const ms = msMin + (msMax - msMin) * Math.min(1, km(S.cur, to) / CONFIG.flightKmMax);
+  S.flying = { from: S.cur, to, t0: performance.now(), ms };
+  // 出発地と行き先が両方入るまで引く（近い移動ほど大きく拡大される）
+  camFit([S.cur, to]);
+}
+
+function land(to) {
+  S.flying = null;
+  S.legs++;
+  S.route.push(to);
+  camCenter(to);
+  arrive(to);
+}
+
+// quit：終了ボタンで途中でやめたとき
+function endGame(reached, quit = false) {
+  if (S.ended) return;
+  S.ended = true; S.running = false;
+  $('btn-quit').hidden = true;
+  clearInterval(S.rotateTimer);
+  const used = CONFIG.timeLimitSec - S.timeLeft;
+  const rec = { name: S.name, reached, time: +used.toFixed(1), dist: S.cur.distGoalKm, legs: S.legs, last: S.cur.word, at: Date.now() };
+  const all = loadRecords(); all.push(rec); saveRecords(all);
+
+  $('end-kind').textContent = reached ? 'ARRIVED' : quit ? 'QUIT' : 'TIME UP';
+  $('end-result').innerHTML = reached
+    ? `言葉界の成田空港「${esc(GOAL.word)}」に到着！<br>${fmtTime(used)}・${S.legs}便`
+    : `「${esc(S.cur.word)}」で${quit ? '途中終了' : '時間切れ'}<br>ゴールまで ${fmtKm(S.cur.distGoalKm)} km`;
+  $('end-route').textContent = '航路：' + S.route.map((w) => w.word).join(' → ');
+  renderRanking(rec);
+  renderReveal();
+  renderCoincidences();
+  S.showRoute = { t0: performance.now() };
+  camFit([...S.route, GOAL]);
+  setTimeout(() => $('screen-end').classList.remove('hidden'), 1200);
+  renderRouteList();
+  popTab('route');
+  openReveal(true);
+}
+
+// ---------------------------------------------------------------- 種明かし（終了画面）
+// 言葉の住所の決め方・自分が立ち寄った言葉の決め手・言葉の住所の分布
+const shortName = (t) => t.replace(/ \(.*\)$/, '');
+const routeLegMs = () => Math.max(250, Math.min(700, 4000 / Math.max(1, S.route.length - 1)));
+
+// 航路タブ：寄った空港を、軌跡が光るのと同じタイミングで1つずつ出す
+function renderRouteList() {
+  const legMs = routeLegMs();
+  const ol = $('pop-route');
+  ol.innerHTML = '';
+  S.route.forEach((w, i) => {
+    const li = document.createElement('li');
+    li.style.animationDelay = `${Math.round(i * legMs)}ms`;
+    li.innerHTML = `<span class="rt-num">${i + 1}</span>
+      <div class="rt-body">
+        <div class="rt-word">${esc(w.word)}${w === GOAL ? ' <span class="rt-goal">GOAL</span>' : ''}</div>
+        <div class="rt-addr">${esc(w.address)} ・ ${esc(w.iata)}</div>
+        <div class="rt-dist">ゴールまで ${fmtKm(w.distGoalKm)} km</div>
+        <div class="rt-near">意味のご近所：${esc(w.members.slice(0, 3).map(shortName).join('・') || '—')}</div>
+      </div>
+      <img class="rt-photo" alt="" hidden>`;
+    // 地図の上でその空港を光らせる
+    li.addEventListener('mouseenter', () => { HOVER = w; });
+    li.addEventListener('mouseleave', () => { if (HOVER === w) HOVER = null; });
+    ol.appendChild(li);
+    if (w.wiki) getPhoto(w.wiki).then((p) => { if (!p) return; const img = li.querySelector('.rt-photo'); img.onload = () => { img.hidden = false; }; img.src = p.src; });
+  });
+}
+// ---------------------------------------------------------------- 偶然の一致
+// 住所は意味と関係なく決めたのに、たまたま言葉にぴったりの国の空港に住んでいた言葉（データから探して選んだ）
+const COINCIDENCES = [
+  ['ポルトガル語', 'ブラジルは、ポルトガル語を話す国。'],
+  ['インド発祥の宗教', 'インドで生まれた宗教が、インドの空港に。'],
+  ['シカゴ条約', 'アメリカのシカゴで結ばれた「空の旅のルール」の条約。しかも住所が空港。'],
+  ['大相撲', '日本の国技が、日本の空港に。'],
+  ['トリニティ実験', 'アメリカで行われた、人類最初の核実験。'],
+  ['戦争と平和 (1956年の映画)', 'イタリアとアメリカで作られた映画が、イタリアの空港に。'],
+  ['ポトマック川', 'アメリカの川が、アメリカの空港に。'],
+  ['焼き干し', '日本の昔ながらの保存食が、北海道の空港に。'],
+  ['キム・ポッシブル', 'アメリカのアニメが、アメリカの空港に。'],
+  ['1963年日本グランプリ (4輪)', '日本のレースが、日本の空港に。'],
+];
+const COINCIDENCE_NOTE = Object.fromEntries(COINCIDENCES);
+function renderCoincidences() {
+  const items = COINCIDENCES.map(([t, note]) => [WORDS.find((w) => w.word === t), note]).filter(([w]) => w);
+  $('pop-coin').innerHTML = `<p class="coin-lead">言葉の住所は、意味とは関係なく、言葉どうしのつながりだけで決めました。<br>それなのに、${WORDS.length}語のうち十数語が、<b>たまたま言葉にぴったりの国の空港</b>に住んでいました。</p>
+    <ul class="coin-list">${items.map(([w, note]) => `<li><b>${esc(shortName(w.word))}</b> → ${esc(w.address)}<br><span>${esc(note)}</span></li>`).join('')}</ul>`;
+}
+
+function popTab(name) {
+  for (const t of ['route', 'reveal', 'coin']) {
+    $('tab-' + t).classList.toggle('on', t === name);
+    $('pane-' + t).classList.toggle('hidden', t !== name);
+  }
+}
+
+function openReveal(open) {
+  $('reveal-pop').classList.toggle('hidden', !open);
+  $('reveal-tab').classList.toggle('hidden', open);
+}
+function hideReveal() {
+  clearTimeout(S.revealTimer);
+  $('reveal-pop').classList.add('hidden');
+  $('reveal-tab').classList.add('hidden');
+}
+
+function renderReveal() {
+  const near = (w, n = 3) => w.members.slice(0, n).map(shortName).join('・') || '—';
+  const find = (t) => WORDS.find((w) => w.word === t);
+  const at = (t) => { const w = find(t); return w ? `${esc(w.airport)}（${esc(w.country)}）` : '—'; };
+  const last = S.route[S.route.length - 1] ?? GOAL;
+
+  // 国ごとの言葉の数（上位5）と、そこに住んでいる言葉の例
+  const byC = {};
+  for (const w of WORDS) (byC[w.country] ??= []).push(w);
+  const top = Object.entries(byC).sort((a, b) => b[1].length - a[1].length).slice(0, 5);
+  const max = top[0][1].length;
+  const bars = top.map(([c, ws]) => {
+    const sample = ws.filter((w) => w !== GOAL).sort(() => Math.random() - 0.5).slice(0, 3).map((w) => esc(w.word)).join('、');
+    return `<li><span class="bar-label">${esc(c)}</span><span class="bar"><i style="width:${(ws.length / max) * 100}%"></i></span><span class="bar-n">${ws.length}語</span>
+      <div class="bar-ex">${sample} …</div></li>`;
+  }).join('');
+
+  $('end-reveal').innerHTML = `
+    <h2>種明かし</h2>
+    <p class="lead">言葉の住所（空港）は、言葉の意味とも、実際の土地とも関係ありません。<br>決め手は<b>「言葉どうしの仲の良さ」</b>だけです。</p>
+    <p>もとにしたのは、2つの研究の考え方です。</p>
+    <ul class="src">
+      <li><b>ミコロフたち（2013）「連続空間の単語表現にみられる言語的な規則性」</b><br>言葉を<b>数字の並び（ベクトル）</b>で表すと、意味の近い言葉どうしが近くに集まり、言葉の関係が「向き」になる、という研究。</li>
+      <li><b>スタンフォード大学の講義資料「単語の分散表現」</b><br>そのベクトルの作り方。<b>数える → ありふれたものを割り引く → ぎゅっと縮める</b>。</li>
+    </ul>
+    <p class="note">※ 論文はニューラルネットに文章を読ませてベクトルを「学習」しています。このゲームでは学習はせず、講義資料の「数えて縮める」方法で同じ種類のベクトルを作りました。</p>
+    <p>これを Wikipedia に当てはめて、${WORDS.length}語を世界の空港に並べました。手順は6つです。</p>
+
+    <ol class="steps">
+      <li><b>① 仲間を数える</b><br>
+        「好きなものが似ている人どうしは、気が合う」と考えます。言葉の場合、「好きなもの」は<b>その言葉の Wikipedia 記事がリンクしている記事</b>です。
+        <div class="f">c(言葉, 記事) ＝ 1（リンクしている）／ 0（していない）</div>
+        <div class="how"><b>このゲームでは：</b>${WORDS.length}語 × 約12万6千列 の、0と1の大きな表を作りました（列は「リンク先の記事」と「その言葉にリンクしてくる言葉」。2語以上に共通するものだけ）。「寿司」と「おこわ」の記事は、<b>203個も同じ記事</b>（日本料理・米・駅弁・鰻丼 など）にリンクしていました。</div></li>
+
+      <li><b>② ありふれたものは割り引く（PMI）</b><br>
+        「北海道」や「内閣総理大臣の一覧」のように、いろいろな言葉からリンクされる記事が同じでも、仲間の証拠としては弱いはずです。そこで「偶然より、どれだけよく一緒に出てくるか」を点数にします。
+        <div class="f">PMI ＝ log ( P(言葉と記事が一緒) ÷ ( P(言葉) × P(記事) ) )</div>
+        <div class="f">PPMI ＝ max ( 0 , PMI )</div>
+        <div class="read">読み方：P は「起こる割合」。分母は「たまたま一緒になる割合」、分子は「実際に一緒になる割合」。実際のほうが多ければ点数がプラスになります。マイナスは 0 にします（PPMI）。</div>
+        <div class="how"><b>このゲームでは：</b>①の表の1つ1つをこの点数に置きかえました。よくリンクされる記事ほど P(記事) が大きいので、点数が下がります。さらに P(記事) は「回数の 0.75乗」で計算し、めったに出ない記事の点数が高くなりすぎないようにしました（word2vec でも使われている工夫です）。</div></li>
+
+      <li><b>③ 64個の数字にまとめる（SVD）</b><br>
+        ②の表は横に約12万6千列もあって大きすぎます。表を「大事な方向」の順に分解して、<b>大事な64個だけ</b>を残します。
+        <div class="f">X ≈ U Σ V<sup>T</sup> （上から64個だけ使う）</div>
+        <div class="f">言葉のベクトル ＝ U × √Σ</div>
+        <div class="read">読み方：X は②の表。U・Σ・V は、X を3つに分けた部品です。Σ は「それぞれの方向がどれくらい大事か」の大きさ。U の各行が、言葉ごとの数字の並びになります。</div>
+        <div class="how"><b>このゲームでは：</b>${WORDS.length}語それぞれが、64個の数字（<b>単語ベクトル</b>）になりました。これが言葉の「意味の住所」です。表が大きいので、乱数を使って速く計算するやり方（ランダム化SVD）を使いました。</div></li>
+
+      <li><b>④ 仲の良さをはかる（コサイン類似度）</b><br>
+        2つの言葉のベクトルが、<b>どれくらい同じ向きを向いているか</b>で仲の良さをはかります。
+        <div class="f">cos(a, b) ＝ ( a・b ) ÷ ( |a| × |b| )</div>
+        <div class="read">読み方：a・b は「同じ番号どうしをかけて全部足したもの」、|a| は「ベクトルの長さ」。同じ向きなら 1、無関係なら 0 に近くなります。</div>
+        <div class="how"><b>このゲームでは：</b>航路タブの「意味のご近所」は、この値が大きい順に5つ選んだ言葉です。論文の有名な例「王様 − 男 ＋ 女 ≈ 女王」も、このベクトルの足し算・引き算と、この近さで答えを探しています（このゲームでは足し算はしていません）。</div></li>
+
+      <li><b>⑤ 平らな地図に並べる（t-SNE）</b><br>
+        64次元の世界は目に見えないので、<b>仲の良い言葉ほど近くになるように</b>、紙（2次元）の上に並べ直します。
+        <div class="f">元の世界での近さ p<sub>ij</sub> ∝ exp( −距離<sub>ij</sub><sup>2</sup> ÷ 2σ<sup>2</sup> )</div>
+        <div class="f">紙の上での近さ q<sub>ij</sub> ∝ 1 ÷ ( 1 ＋ |y<sub>i</sub> − y<sub>j</sub>|<sup>2</sup> )</div>
+        <div class="f">ずれ ＝ Σ p<sub>ij</sub> log ( p<sub>ij</sub> ÷ q<sub>ij</sub> ) を小さくする</div>
+        <div class="read">読み方：p は「64次元での仲の良さ」、q は「紙の上での仲の良さ」。2つがそろうように、紙の上の位置 y を少しずつ動かします（900回）。クラス替えで、仲良しどうしが近くの席になるように座席を決める感じです。</div></li>
+
+      <li><b>⑥ 世界の空港に重ねて、ゴールを決める</b><br>
+        紙の上の言葉の並びと、世界の空港の並びを、<b>一筆書きの順番</b>（ヒルベルト曲線：近い点ほど順番も近くなる線）でつないで、1語ずつ空港に割り当てました。
+        <div class="how"><b>このゲームでは：</b>近くの空港には仲の良い言葉が住んでいます。寿司は${at('寿司')}、おこわは${at('おこわ')}。そして、本物の成田空港に割り当てられた言葉が<b>言葉界の成田空港「${esc(GOAL.word)}」</b>です。画面の「ゴールまで ○○ km」は、地球の丸さを考えた2点間の距離（ハーバーサインの公式）で計算しています。</div></li>
+    </ol>
+
+    <h2>だから、こう飛べば近づけた</h2>
+    <p>ゴール「${esc(GOAL.word)}」のご近所は、<b>${esc(near(GOAL, 5))}</b>。<br>
+      「時間」や「暦」に関係がありそうな言葉へ向かう便を選ぶのが近道でした。</p>
+    <p>あなたが最後にいた「${esc(last.word)}」のご近所は、${esc(near(last, 4))}。</p>
+
+    <h2>言葉はどこに住んでいる？</h2>
+    <p>空港の多い国ほど、たくさんの言葉が住んでいます。</p>
+    <ol class="bars">${bars}</ol>`;
+}
+
+// 自分がたどった航路を、光る線と番号つきの言葉で描く（終了画面の後ろ）
+function drawRouteGlow(c, now) {
+  const pts = S.route.map(scr);
+  const legMs = routeLegMs();
+  const prog = (now - S.showRoute.t0) / legMs;           // 何区間目まで描いたか（小数つき）
+  const pulse = (Math.sin(now / 260) + 1) / 2;
+  for (let i = 1; i < pts.length; i++) {
+    const p = Math.max(0, Math.min(1, prog - (i - 1)));
+    if (p <= 0) break;
+    c.save();
+    c.shadowColor = BLUE_GLOW; c.shadowBlur = 14 + pulse * 10;
+    c.strokeStyle = BLUE; c.lineWidth = 4;
+    strokeArc(c, pts[i - 1], pts[i], p);
+    c.restore();
+    c.strokeStyle = '#eaf8ff'; c.lineWidth = 1.5;
+    strokeArc(c, pts[i - 1], pts[i], p);
+  }
+  // 番号つきの言葉（同じ場所に何度も来たら番号をまとめる）
+  const shown = Math.min(pts.length, Math.floor(prog) + 1);
+  const seen = new Map();
+  for (let i = 0; i < shown; i++) {
+    const w = S.route[i];
+    seen.set(w, [...(seen.get(w) ?? []), i + 1]);
+  }
+  // 名前が重なるときは、空いている高さまで下にずらす
+  const boxes = [];
+  c.font = '700 12px "Noto Sans JP", sans-serif';
+  for (const [w, nums] of seen) {
+    const p = scr(w);
+    c.save(); c.shadowColor = BLUE_GLOW; c.shadowBlur = 12;
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(p.x, p.y, 4.5, 0, Math.PI * 2); c.fill();
+    c.restore();
+    const text = `${nums.join('・')}. ${w.word}`;
+    const tw = c.measureText(text).width + 8;
+    let x = p.x + 9, y = p.y - 8;
+    if (x + tw > W) x = W - tw;
+    for (let n = 0; n < 12 && boxes.some((b) => x < b.x + b.w && b.x < x + tw && y - 12 < b.y + 5 && b.y - 12 < y + 5); n++) y += 18;
+    boxes.push({ x, y, w: tw });
+    if (y !== p.y - 8) { c.strokeStyle = 'rgba(255,255,255,0.35)'; c.lineWidth = 1; c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(x, y - 4); c.stroke(); }
+    label(c, x, y, text);
+  }
+  // 全部描き終わったら、最後のほうで固まっている場所（東京など）に寄る
+  if (!S.showRoute.zoomed && prog > pts.length + 1.5) {
+    S.showRoute.zoomed = true;
+    const last = S.route[S.route.length - 1];
+    const tail = [...new Set([...S.route, GOAL])].filter((w) => km(w, last) < 50);
+    if (tail.length >= 2 && tail.length < S.route.length + 1) camFit(tail);
+  }
+}
+
+// ---------------------------------------------------------------- 記録（この端末のブラウザに保存）
+let MEMORY_RECORDS = [];
+function loadRecords() {
+  try { return JSON.parse(localStorage.getItem(CONFIG.storageKey)) ?? MEMORY_RECORDS; } catch { return MEMORY_RECORDS; }
+}
+function saveRecords(r) {
+  MEMORY_RECORDS = r;
+  try { localStorage.setItem(CONFIG.storageKey, JSON.stringify(r)); } catch {}
+}
+function rankSort(a, b) {
+  if (a.reached !== b.reached) return a.reached ? -1 : 1;     // 到着した人が上
+  if (a.reached) return a.time - b.time || a.legs - b.legs;   // 到着者は早い順
+  return a.dist - b.dist || a.time - b.time;                  // 未到着は近い順
+}
+function renderRanking(me) {
+  const list = loadRecords().sort(rankSort);
+  const ol = $('ranking'); ol.innerHTML = '';
+  list.slice(0, 10).forEach((r, i) => {
+    const li = document.createElement('li');
+    if (r.at === me.at) li.className = 'me';
+    li.innerHTML = `<span>${i + 1}</span><span>${esc(r.name)}</span><span>${r.reached ? '到着 ' + fmtTime(r.time) : fmtKm(r.dist) + ' km'}</span>`;
+    ol.appendChild(li);
+  });
+  const rank = list.findIndex((r) => r.at === me.at);
+  if (rank >= 10) {
+    const li = document.createElement('li'); li.className = 'me';
+    li.innerHTML = `<span>${rank + 1}</span><span>${esc(me.name)}</span><span>${me.reached ? '到着 ' + fmtTime(me.time) : fmtKm(me.dist) + ' km'}</span>`;
+    ol.appendChild(li);
+  }
+}
+
+// ---------------------------------------------------------------- 起動
+let WORDS_BY_ID = {};
+const REACHABLE = new Set();
+async function boot() {
+  try {
+    const [d, land] = await Promise.all([
+      fetch('data/words.json?v=22').then((r) => r.json()),
+      fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
+    DATA = d; LAND = land; WORDS = d.words;
+    WORDS_BY_ID = Object.fromEntries(WORDS.map((w) => [w.id, w]));
+    GOAL = WORDS_BY_ID[d.goal];
+    // ゴールまで便を乗り継いでたどり着ける言葉だけをスタート候補にする（ゴールから逆向きにたどる）
+    const inbound = {};
+    for (const w of WORDS) for (const id of w.flights) (inbound[id] ??= []).push(w.id);
+    const queue = [GOAL.id];
+    REACHABLE.add(GOAL.id);
+    while (queue.length) for (const from of inbound[queue.shift()] ?? []) if (!REACHABLE.has(from)) { REACHABLE.add(from); queue.push(from); }
+    $('goal-word').textContent = `「${GOAL.word}」`;
+    $('hud-dist-lbl').textContent = `${GOAL.word}（成田）まで`;
+    $('load-msg').textContent = `空港 ${WORDS.length} か所 / 言葉界の成田空港は「${GOAL.word}」（${GOAL.address}）`;
+    resize();
+    setupPointer();
+    const ready = () => ($('btn-start').disabled = !$('name').value.trim());
+    $('name').addEventListener('input', ready);
+    $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !$('btn-start').disabled) showBrief(); });
+    $('btn-start').addEventListener('click', showBrief);
+    $('brief-skip').addEventListener('click', finishBrief);
+    $('brief-next').addEventListener('click', () => { if (++BRIEF_PAGE >= briefPages().length) finishBrief(); else renderBrief(); });
+    $('reveal-close').addEventListener('click', () => openReveal(false));
+    $('reveal-tab').addEventListener('click', () => openReveal(true));
+    $('tab-route').addEventListener('click', () => popTab('route'));
+    $('tab-reveal').addEventListener('click', () => popTab('reveal'));
+    $('tab-coin').addEventListener('click', () => popTab('coin'));
+    $('btn-quit').addEventListener('click', () => {
+      if (!S.running || S.ended) return;
+      if (window.confirm('本当に終了しますか？（今いる空港からゴールまでの距離が記録されます）')) endGame(false, true);
+    });
+    $('btn-again').addEventListener('click', () => { hideReveal(); camHome(); $('screen-end').classList.add('hidden'); $('screen-start').classList.remove('hidden'); $('name').focus(); });
+    window.addEventListener('resize', resize);
+    $('name').focus();
+    requestAnimationFrame((t) => { S.lastTick = t; loop(t); });
+  } catch (e) {
+    $('load-msg').textContent = 'データを読み込めませんでした。scripts/build_data.mjs を先に実行し、ローカルサーバーで開いてください。';
+    console.error(e);
+  }
+}
+boot();

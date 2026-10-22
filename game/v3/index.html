@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>言葉航空 v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=22">
+</head>
+<body>
+<div id="app">
+  <div id="mapwrap">
+    <canvas id="base"></canvas>
+    <canvas id="live"></canvas>
+    <div id="hud-top">
+      <div class="hud-big"><span class="jlbl" id="hud-dist-lbl">ゴールまで</span><span id="hud-dist">— km</span></div>
+      <button id="btn-quit" hidden>■ 終了</button>
+    </div>
+    <!-- 地図の右上：着いた空港の名前と写真 -->
+    <div id="airport-card">
+      <div id="here-addr">—</div>
+      <figure id="here-photo">
+        <img id="here-photo-img" alt="" hidden>
+        <span class="noimg">✈</span>
+        <figcaption><a id="here-photo-credit" target="_blank" rel="noopener" hidden>写真：Wikimedia Commons</a></figcaption>
+      </figure>
+      <div class="ap-foot"><span id="here-meta"></span><a id="here-sv" target="_blank" rel="noopener">▶ ストリートビュー</a></div>
+    </div>
+    <div id="hud-timer">
+      <span class="jlbl">残り時間</span>
+      <div class="seg"><span class="seg-ghost">8:88.8</span><span id="hud-time">1:00.0</span></div>
+    </div>
+    <div id="hud-sub">
+      <span><span class="lbl">PILOT</span> <b id="hud-name">—</b></span>
+      <span><span class="lbl">FLIGHTS</span> <b id="hud-legs">0</b></span>
+    </div>
+    <div id="intro" class="hidden">
+      <div id="intro-lead">出発地は……</div>
+      <div id="intro-word"></div>
+      <div id="intro-addr"></div>
+    </div>
+    <div id="map-hint">マウスを乗せると言葉が見える ／ ホイールで拡大・ドラッグで移動</div>
+  </div>
+
+  <aside id="panel">
+    <!-- 右上：言葉とその説明 -->
+    <section id="here">
+      <div class="lbl">現在地 / NOW AT</div>
+      <h1 id="here-word">—</h1>
+      <p id="here-desc"></p>
+      <div id="here-coin" hidden></div>
+    </section>
+    <section id="board">
+      <div class="board-head">
+        <span>出発便 / DEPARTURES</span>
+        <span id="board-total"></span>
+      </div>
+      <ol id="flights"></ol>
+      <div id="board-foot"></div>
+    </section>
+    <section id="goal">
+      <div class="lbl">目的地 / DESTINATION</div>
+      <div>言葉界の成田空港 <b id="goal-word">—</b></div>
+    </section>
+  </aside>
+</div>
+
+<div id="screen-start" class="screen">
+  <div class="card">
+    <div class="logo">言葉航空<small>KOTOBA AIRWAYS — WORLD</small></div>
+    <p>すべての言葉には、世界のどこかに空港がある。<br>
+       言葉から言葉へ飛行機を乗り継いで、<b>言葉界の成田空港</b>を目指せ。</p>
+    <ul class="rules">
+      <li>出発便から行き先を選んで、言葉から言葉へ乗り継ぐ。</li>
+      <li>制限時間は1分。</li>
+      <li>時間切れのとき、ゴールに一番近い人が勝ち。</li>
+    </ul>
+    <label>パイロット名<input id="name" maxlength="16" autocomplete="off" placeholder="名前を入力"></label>
+    <button id="btn-start" disabled>搭乗する</button>
+    <div id="load-msg" class="small">データを読み込み中…</div>
+    <div class="small" style="margin-top:12px">データ：Wikipedia日本語版（CC BY-SA 4.0）、OurAirports、Natural Earth</div>
+  </div>
+</div>
+
+<div id="screen-brief" class="screen hidden">
+  <div class="card">
+    <div class="brief-head"><span class="lbl">BRIEFING</span><span class="lbl" id="brief-step">1 / 2</span></div>
+    <h2 id="brief-title"></h2>
+    <div id="brief-body"></div>
+    <div class="brief-btns">
+      <button id="brief-skip" class="ghost">スキップ</button>
+      <button id="brief-next">次へ ▶</button>
+    </div>
+  </div>
+</div>
+
+<aside id="reveal-pop" class="hidden">
+  <div class="pop-head">
+    <div class="pop-tabs"><button id="tab-route" class="on">航路</button><button id="tab-reveal">種明かし</button><button id="tab-coin">偶然の一致</button></div>
+    <button id="reveal-close" title="閉じる">✕ 閉じる</button>
+  </div>
+  <div id="pane-route"><ol id="pop-route"></ol></div>
+  <div id="pane-reveal" class="hidden"><div id="end-reveal"></div></div>
+  <div id="pane-coin" class="hidden"><div id="pop-coin"></div></div>
+</aside>
+<button id="reveal-tab" class="hidden">▲ 航路・種明かし・偶然の一致</button>
+
+<div id="screen-end" class="screen hidden">
+  <div class="card wide">
+    <div class="lbl" id="end-kind">RESULT</div>
+    <div id="end-result"></div>
+    <div id="end-route"></div>
+    <h2>RANKING</h2>
+    <ol id="ranking"></ol>
+    <button id="btn-again">もう一度飛ぶ</button>
+  </div>
+</div>
+
+<script src="main.js?v=22"></script>
+</body>
+</html>
