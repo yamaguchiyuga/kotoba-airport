@@ -486,7 +486,7 @@ function briefPages() {
       <li>制限時間は<b>${CONFIG.timeLimitSec}秒</b>。</li>
       <li>時間切れのとき、ゴールに一番近い人が勝ち。</li>
     </ul>` },
-    { title: '言葉の住所', html: `<p class="brief-big">言葉に、世界の空港を住所として設定しました。</p>` },
+    { title: '言葉の住所', html: `<p class="brief-big">言葉たちに、空港を当てはめました。</p>` },
   ];
 }
 let BRIEF_PAGE = 0;
@@ -900,7 +900,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=5').then((r) => r.json()),
+      fetch('data/words.json?v=7').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;

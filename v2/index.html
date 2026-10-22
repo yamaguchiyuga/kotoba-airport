@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <div id="app">
@@ -15,8 +15,11 @@
     <canvas id="base"></canvas>
     <canvas id="live"></canvas>
     <div id="hud-top">
-      <div class="hud-big"><span class="jlbl">残り時間</span><span id="hud-time">1:00.0</span></div>
       <div class="hud-big"><span class="jlbl" id="hud-dist-lbl">ゴールまで</span><span id="hud-dist">— km</span></div>
+    </div>
+    <div id="hud-timer">
+      <span class="jlbl">残り時間</span>
+      <div class="seg"><span class="seg-ghost">8:88.8</span><span id="hud-time">1:00.0</span></div>
     </div>
     <div id="hud-sub">
       <span><span class="lbl">PILOT</span> <b id="hud-name">—</b></span>
@@ -114,6 +117,6 @@
   </div>
 </div>
 
-<script src="main.js?v=5"></script>
+<script src="main.js?v=7"></script>
 </body>
 </html>
