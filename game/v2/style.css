@@ -141,3 +141,7 @@ a { color: var(--ink); }
 .bar i { display: block; height: 100%; background: #4fc3ff; box-shadow: 0 0 10px rgba(79,195,255,.7); }
 .bar-n { font: 12px var(--mono); text-align: right; }
 .bar-ex { grid-column: 1 / -1; font-size: 11px; color: var(--dim); margin-top: -4px; }
+
+/* 追い風便（遅れているときの救済） */
+#flights li.boost button { border-color: #ffd34f; background: rgba(255, 211, 79, .08); box-shadow: 0 0 14px rgba(255, 211, 79, .35); }
+#flights li.boost .stat { color: #ffd34f; font-weight: 700; letter-spacing: .2em; }

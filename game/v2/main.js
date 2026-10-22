@@ -4,6 +4,13 @@
 const CONFIG = {
   timeLimitSec: 60,                        // 制限時間（秒）
   flightMs: [1200, 2200],                  // 飛行アニメーションの長さ（短距離〜長距離）。飛んでいる間もタイマーは進む
+  // 便の選び方
+  hopMinKm: 800,                           // 便の飛距離の上限は「ゴールまでの距離 × hopRatio」。ただしこれより短くはしない
+  hopRatio: 1.5,
+  keepRatio: 0.5,                          // 1回の便で、ゴールまでの距離は最大でも半分までしか縮まない
+  earlySec: 25,                            // 最初のこの秒数は、ゴールの近く（earlyKm 以内）へ行く便を出さない
+  earlyKm: 2500,
+  boostAtSec: [35, 15],                    // 残りがこの秒数を切って遅れていたら、追い風便を 1便・2便 出す
   maxZoom: 120,                            // 自動ズームの最大倍率（世界地図なので v1 より小さい）
   flightKmMax: 12000,                      // この距離で飛行時間が最長になる
   introMs: [700, 3600, 5600],              // 「出発地は……」演出：ルーレット開始・決定・離陸の時刻（ミリ秒）
@@ -553,34 +560,95 @@ function arrive(w) {
   setupBoard(w);
 }
 
-// 便を「ゴールに近づく便」と「遠ざかる便」に分け、掲示板には半分ずつ出す
+// ---------------------------------------------------------------- 掲示板に出す便を選ぶ
+// ・ゴールに近づくほど、便の飛距離は短くなる（最後は細かく刻む）
+// ・最初のうちは、ゴールの近く（日本のあたり）へ一気に行く便は出さない
+// ・時間がないのに進んでいないときは、ゴールへ大きく近づく「追い風便」が出る（マリオカートの救済のように）
+// ・それ以外は「近づく便」と「遠ざかる便」を半分ずつ
+const hopKm = (a, b) => km(a, b);
+function flightPools(w) {
+  const elapsed = CONFIG.timeLimitSec - S.timeLeft;
+  const hopCap = Math.max(CONFIG.hopMinKm, w.distGoalKm * CONFIG.hopRatio);
+  const floorKm = Math.max(w.distGoalKm * CONFIG.keepRatio, elapsed < CONFIG.earlySec && w.distGoalKm > CONFIG.earlyKm ? CONFIG.earlyKm : 0);
+  const all = w.flights.map((id) => WORDS_BY_ID[id]);
+  const near = all.filter((x) => x.distGoalKm < w.distGoalKm && x.distGoalKm >= floorKm && hopKm(w, x) <= hopCap);
+  const far = all.filter((x) => x.distGoalKm >= w.distGoalKm && hopKm(w, x) <= hopCap);
+  // 条件に合う便が足りないときの予備。予備も序盤の制限は守り、飛距離は上限の2倍まで
+  //   近づく便は「近づき方が小さい順」、遠ざかる便は「近い順」
+  const earlyFloor = elapsed < CONFIG.earlySec && w.distGoalKm > CONFIG.earlyKm ? CONFIG.earlyKm : 0;
+  const nearSpare = all.filter((x) => x.distGoalKm < w.distGoalKm && x.distGoalKm >= earlyFloor && hopKm(w, x) <= hopCap * 2 && !near.includes(x))
+    .sort((p, q) => q.distGoalKm - p.distGoalKm);
+  const farSpare = all.filter((x) => x.distGoalKm >= w.distGoalKm && hopKm(w, x) <= hopCap * 2 && !far.includes(x))
+    .sort((p, q) => hopKm(w, p) - hopKm(w, q));
+  // それでも2便に満たないときだけ、近い順に足す（行き止まりを防ぐ）
+  const lastResort = all.filter((x) => ![...near, ...far, ...nearSpare, ...farSpare].includes(x)).sort((p, q) => hopKm(w, p) - hopKm(w, q));
+  if (near.length + far.length + nearSpare.length + farSpare.length < 2) farSpare.push(...lastResort.slice(0, 2));
+  return { near, far, nearSpare, farSpare };
+}
+// 遅れているか：経過した時間の割合に比べて、ゴールへの近づき方が足りないとき、追い風便の数を返す
+function boostCount() {
+  const start = S.route[0]?.distGoalKm ?? S.cur.distGoalKm;
+  const progress = 1 - S.cur.distGoalKm / start;
+  const timeFrac = 1 - S.timeLeft / CONFIG.timeLimitSec;
+  const behind = progress < timeFrac * 0.8;
+  if (!behind || S.cur === GOAL) return 0;
+  const [t1, t2] = CONFIG.boostAtSec;
+  return S.timeLeft < t2 ? 2 : S.timeLeft < t1 ? 1 : 0;
+}
+// 追い風便：今いる言葉の便の中で、ゴールへ一番大きく近づくもの（飛距離・序盤の制限は無視）
+function boostFlights(w, n, exclude) {
+  return w.flights.map((id) => WORDS_BY_ID[id]).filter((x) => x.distGoalKm < w.distGoalKm && !exclude.has(x))
+    .sort((p, q) => p.distGoalKm - q.distGoalKm).slice(0, n);
+}
+
 function setupBoard(w) {
   clearInterval(S.rotateTimer);
   const slots = Math.min(CONFIG.slotsByTier[w.tier], w.flights.length);
   const shuffle = (a) => a.sort(() => Math.random() - 0.5);
-  const near = shuffle(w.flights.filter((id) => WORDS_BY_ID[id].distGoalKm < w.distGoalKm));
-  const far = shuffle(w.flights.filter((id) => WORDS_BY_ID[id].distGoalKm >= w.distGoalKm));
-  const isFar = (b) => b.distGoalKm >= w.distGoalKm;
+  const P = flightPools(w);
+  shuffle(P.near); shuffle(P.far);
+  const nearList = [...P.near, ...P.nearSpare], farList = [...P.far, ...P.farSpare];
   // 遠ざかる便を半分（足りなければ近づく便で埋める。逆も同じ）
-  let nFar = Math.min(far.length, Math.floor(slots / 2));
-  let nNear = Math.min(near.length, slots - nFar);
-  nFar = Math.min(far.length, slots - nNear);
-  S.board = shuffle([...far.slice(0, nFar), ...near.slice(0, nNear)]).map((id) => WORDS_BY_ID[id]);
+  let nFar = Math.min(farList.length, Math.floor(slots / 2));
+  let nNear = Math.min(nearList.length, slots - nFar);
+  nFar = Math.min(farList.length, slots - nNear);
+  S.board = shuffle([...farList.slice(0, nFar), ...nearList.slice(0, nNear)]);
+  S.boost = new Set();
+  applyBoost(w);
   renderBoard(-1);
   $('board-foot').textContent = w.flights.length > slots ? '便は随時入れ替わります' : '';
-  if (w.flights.length > slots) {
+  if (w.flights.length > slots || boostCount() < 2) {
     S.rotateTimer = setInterval(() => {
-      if (S.flying || S.ended) return;
-      const shown = new Set(S.board.map((b) => b.id));
+      if (S.flying || S.ended || !S.running) return;
+      if (applyBoost(w)) return renderBoard(-1);           // 遅れてきたら、入れ替えのタイミングで追い風便を出す
+      if (w.flights.length <= slots) return;
+      const shown = new Set(S.board);
       const i = Math.floor(Math.random() * S.board.length);
+      if (S.boost.has(S.board[i])) return;                  // 追い風便は消さない
+      const Q = flightPools(w);
+      const far = S.board[i].distGoalKm >= w.distGoalKm;
       // 入れ替えるときは、同じ側（近づく／遠ざかる）の便と交代させて、半分ずつを保つ
-      const same = (isFar(S.board[i]) ? far : near).filter((id) => !shown.has(id));
-      const rest = same.length ? same : w.flights.filter((id) => !shown.has(id));
-      if (!rest.length) return;
-      S.board[i] = WORDS_BY_ID[pick(rest)];
+      const same = (far ? [...Q.far, ...Q.farSpare.slice(0, 2)] : [...Q.near, ...Q.nearSpare.slice(0, 2)]).filter((x) => !shown.has(x));
+      if (!same.length) return;
+      S.board[i] = pick(same);
       renderBoard(i);
     }, CONFIG.rotateMsByTier[w.tier]);
   }
+}
+// 追い風便を掲示板に入れる（足りない分だけ、遠ざかる便と入れ替える）。入れたら true
+function applyBoost(w) {
+  const need = boostCount() - S.boost.size;
+  if (need <= 0) return false;
+  const add = boostFlights(w, need, new Set([...S.boost]));
+  let changed = false;
+  for (const x of add) {
+    if (S.board.includes(x)) { S.boost.add(x); changed = true; continue; }
+    let i = S.board.findIndex((y) => !S.boost.has(y) && y.distGoalKm >= w.distGoalKm);
+    if (i < 0) i = S.board.findIndex((y) => !S.boost.has(y));
+    if (i < 0) break;
+    S.board[i] = x; S.boost.add(x); changed = true;
+  }
+  return changed;
 }
 
 function renderBoard(newIndex) {
@@ -589,7 +657,9 @@ function renderBoard(newIndex) {
   S.board.forEach((to, i) => {
     const li = document.createElement('li');
     if (i === newIndex) li.className = 'new';
-    li.innerHTML = `<button><span class="code">${flightCode(S.cur, to)}</span><span class="dest">${esc(to.word)} 行き</span><span class="stat">BOARDING</span></button>`;
+    const boost = S.boost?.has(to);
+    if (boost) li.classList.add('boost');
+    li.innerHTML = `<button><span class="code">${flightCode(S.cur, to)}</span><span class="dest">${esc(to.word)} 行き</span><span class="stat">${boost ? '追い風' : 'BOARDING'}</span></button>`;
     li.querySelector('button').addEventListener('click', () => takeFlight(to));
     ol.appendChild(li);
   });
@@ -754,7 +824,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=2').then((r) => r.json()),
+      fetch('data/words.json?v=3').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
