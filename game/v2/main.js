@@ -740,12 +740,46 @@ function endGame(reached) {
   S.showRoute = { t0: performance.now() };
   camFit([...S.route, GOAL]);
   setTimeout(() => $('screen-end').classList.remove('hidden'), 1200);
-  S.revealTimer = setTimeout(() => openReveal(true), 3800);
+  renderRouteList();
+  popTab('route');
+  openReveal(true);
 }
 
 // ---------------------------------------------------------------- 種明かし（終了画面）
 // 言葉の住所の決め方・自分が立ち寄った言葉の決め手・言葉の住所の分布
 const shortName = (t) => t.replace(/ \(.*\)$/, '');
+const routeLegMs = () => Math.max(250, Math.min(700, 4000 / Math.max(1, S.route.length - 1)));
+
+// 航路タブ：寄った空港を、軌跡が光るのと同じタイミングで1つずつ出す
+function renderRouteList() {
+  const legMs = routeLegMs();
+  const ol = $('pop-route');
+  ol.innerHTML = '';
+  S.route.forEach((w, i) => {
+    const li = document.createElement('li');
+    li.style.animationDelay = `${Math.round(i * legMs)}ms`;
+    li.innerHTML = `<span class="rt-num">${i + 1}</span>
+      <div class="rt-body">
+        <div class="rt-word">${esc(w.word)}${w === GOAL ? ' <span class="rt-goal">GOAL</span>' : ''}</div>
+        <div class="rt-addr">${esc(w.address)} ・ ${esc(w.iata)}</div>
+        <div class="rt-dist">ゴールまで ${fmtKm(w.distGoalKm)} km</div>
+        <div class="rt-near">意味のご近所：${esc(w.members.slice(0, 3).map(shortName).join('・') || '—')}</div>
+      </div>
+      <img class="rt-photo" alt="" hidden>`;
+    // 地図の上でその空港を光らせる
+    li.addEventListener('mouseenter', () => { HOVER = w; });
+    li.addEventListener('mouseleave', () => { if (HOVER === w) HOVER = null; });
+    ol.appendChild(li);
+    if (w.wiki) getPhoto(w.wiki).then((p) => { if (!p) return; const img = li.querySelector('.rt-photo'); img.onload = () => { img.hidden = false; }; img.src = p.src; });
+  });
+}
+function popTab(name) {
+  for (const t of ['route', 'reveal']) {
+    $('tab-' + t).classList.toggle('on', t === name);
+    $('pane-' + t).classList.toggle('hidden', t !== name);
+  }
+}
+
 function openReveal(open) {
   $('reveal-pop').classList.toggle('hidden', !open);
   $('reveal-tab').classList.toggle('hidden', open);
@@ -758,10 +792,6 @@ function hideReveal() {
 
 function renderReveal() {
   const near = (w, n = 3) => w.members.slice(0, n).map(shortName).join('・') || '—';
-  const visited = [...new Set(S.route)];
-  const visitedHtml = visited.map((w) => `<li><b>${esc(w.word)}</b> → ${esc(w.address)}<br>
-    <span class="dim">意味のご近所：${esc(near(w))}</span></li>`).join('');
-
   // 国ごとの言葉の数（上位5）と、そこに住んでいる言葉の例
   const byC = {};
   for (const w of WORDS) (byC[w.country] ??= []).push(w);
@@ -778,8 +808,6 @@ function renderReveal() {
     <p>言葉の住所は、その言葉の意味とも、実際の土地とも関係ありません。決め手は<b>言葉どうしのつながり</b>だけです。</p>
     <p>Wikipedia で<b>同じ記事にリンクしている言葉どうし</b>を「意味が近い」とみなして、${WORDS.length}語の「意味の地図」を作りました（Mikolov ら 2013 の単語ベクトルの考え方）。その地図を、近い言葉が隣どうしのまま、世界の空港に重ねています。</p>
     <p>だから、<b>近くの空港には意味の近い言葉</b>が住んでいます。ゴールの「${esc(GOAL.word)}」のご近所は、${esc(near(GOAL, 5))}。ゴールに近づくには、こういう言葉へ向かう便を選ぶのが近道でした。</p>
-    <h2>あなたが立ち寄った言葉</h2>
-    <ul class="reveal-list">${visitedHtml}</ul>
     <h2>言葉はどこに住んでいる？</h2>
     <p>空港の多い国ほど、たくさんの言葉が住んでいます。</p>
     <ol class="bars">${bars}</ol>`;
@@ -788,7 +816,7 @@ function renderReveal() {
 // 自分がたどった航路を、光る線と番号つきの言葉で描く（終了画面の後ろ）
 function drawRouteGlow(c, now) {
   const pts = S.route.map(scr);
-  const legMs = Math.max(250, Math.min(700, 4000 / Math.max(1, pts.length - 1)));
+  const legMs = routeLegMs();
   const prog = (now - S.showRoute.t0) / legMs;           // 何区間目まで描いたか（小数つき）
   const pulse = (Math.sin(now / 260) + 1) / 2;
   for (let i = 1; i < pts.length; i++) {
@@ -872,7 +900,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=4').then((r) => r.json()),
+      fetch('data/words.json?v=5').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
@@ -897,6 +925,8 @@ async function boot() {
     $('brief-next').addEventListener('click', () => { if (++BRIEF_PAGE >= briefPages().length) finishBrief(); else renderBrief(); });
     $('reveal-close').addEventListener('click', () => openReveal(false));
     $('reveal-tab').addEventListener('click', () => openReveal(true));
+    $('tab-route').addEventListener('click', () => popTab('route'));
+    $('tab-reveal').addEventListener('click', () => popTab('reveal'));
     $('btn-again').addEventListener('click', () => { hideReveal(); camHome(); $('screen-end').classList.add('hidden'); $('screen-start').classList.remove('hidden'); $('name').focus(); });
     window.addEventListener('resize', resize);
     $('name').focus();
