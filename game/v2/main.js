@@ -15,7 +15,9 @@ const CONFIG = {
   maxZoom: 120,                            // 自動ズームの最大倍率（世界地図なので v1 より小さい）
   flightKmMax: 12000,                      // この距離で飛行時間が最長になる
   introMs: [700, 3600, 5600],              // 「出発地は……」演出：ルーレット開始・決定・離陸の時刻（ミリ秒）
-  slotsByTier: [0, 2, 4, 6, 8],            // 空港の規模ごとの、掲示板に出る便の数（tier 1〜4）
+  slotsByTier: [0, 2, 4, 5, 6],            // 空港の規模ごとの、掲示板に出る便の数（tier 1〜4）。最大6択
+  maxBack: 1,                              // 来た道を戻る向きの便は、掲示板に最大この数まで
+  backCos: -0.5,                           // 向きのちがいが120度以上（cos < -0.5）なら「戻る向き」
   rotateMsByTier: [0, 6000, 4500, 3000, 2000], // 便が入れ替わる間隔（ハブほど慌ただしい）
   meshNeighbors: 3,                        // 白い網目：各空港を近い何か所とつなぐか
   storageKey: 'kotoba-koku-v2-records',
@@ -699,18 +701,34 @@ function boostFlights(w, n, exclude) {
     .sort((p, q) => p.distGoalKm - q.distGoalKm).slice(0, n);
 }
 
+// 来た道を戻る向きか：ひとつ前の空港 → 今の空港 の向きと、今の空港 → 行き先 の向きが 120度以上ちがう
+function isBack(w, x) {
+  const prev = S.route.length >= 2 ? S.route[S.route.length - 2] : null;
+  if (!prev || prev === w) return false;
+  const ax = w.x - prev.x, ay = w.y - prev.y, bx = x.x - w.x, by = x.y - w.y;
+  const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+  if (!la || !lb) return false;
+  return (ax * bx + ay * by) / (la * lb) < CONFIG.backCos;
+}
+
 function setupBoard(w) {
   clearInterval(S.rotateTimer);
   const slots = Math.min(CONFIG.slotsByTier[w.tier], w.flights.length);
   const shuffle = (a) => a.sort(() => Math.random() - 0.5);
   const P = flightPools(w);
   shuffle(P.near); shuffle(P.far);
-  const nearList = [...P.near, ...P.nearSpare], farList = [...P.far, ...P.farSpare];
+  // 来た道を戻る向きの便は後回し（足りないときだけ使う）
+  const backLast = (a) => [...a.filter((x) => !isBack(w, x)), ...a.filter((x) => isBack(w, x))];
+  const nearList = backLast([...P.near, ...P.nearSpare]), farList = backLast([...P.far, ...P.farSpare]);
   // 遠ざかる便は4分の1だけ。残りは近づく便（足りなければもう一方で埋める）
   let nFar = Math.min(farList.length, Math.floor(slots * CONFIG.farShare));
   let nNear = Math.min(nearList.length, slots - nFar);
   nFar = Math.min(farList.length, slots - nNear);
-  S.board = shuffle([...farList.slice(0, nFar), ...nearList.slice(0, nNear)]);
+  S.board = [...farList.slice(0, nFar), ...nearList.slice(0, nNear)];
+  // 戻る向きの便は掲示板に最大1便まで（便が2つ未満になるときは残す）
+  const back = S.board.filter((x) => isBack(w, x));
+  for (const x of back.slice(CONFIG.maxBack)) if (S.board.length > 2) S.board.splice(S.board.indexOf(x), 1);
+  shuffle(S.board);
   S.boost = new Set();
   applyBoost(w);
   renderBoard(-1);
@@ -726,7 +744,10 @@ function setupBoard(w) {
       const Q = flightPools(w);
       const far = S.board[i].distGoalKm >= w.distGoalKm;
       // 入れ替えるときは、同じ側（近づく／遠ざかる）の便と交代させて、半分ずつを保つ
-      const same = (far ? [...Q.far, ...Q.farSpare.slice(0, 2)] : [...Q.near, ...Q.nearSpare.slice(0, 2)]).filter((x) => !shown.has(x));
+      let same = (far ? [...Q.far, ...Q.farSpare.slice(0, 2)] : [...Q.near, ...Q.nearSpare.slice(0, 2)]).filter((x) => !shown.has(x));
+      // 戻る向きの便は、掲示板に1便までに保つ
+      const backShown = S.board.filter((x, j) => j !== i && isBack(w, x)).length;
+      if (backShown >= CONFIG.maxBack) same = same.filter((x) => !isBack(w, x));
       if (!same.length) return;
       S.board[i] = pick(same);
       renderBoard(i);
@@ -963,7 +984,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=14').then((r) => r.json()),
+      fetch('data/words.json?v=15').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;

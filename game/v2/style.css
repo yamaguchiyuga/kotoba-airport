@@ -244,3 +244,37 @@ a { color: var(--ink); }
   .here-grid { grid-template-columns: 92px 1fr; gap: 10px; }
   #here-photo img, #here-photo .noimg { height: 66px; }
 }
+
+/* ===== 配置（ラフに合わせる） =====
+   地図：左上＝ゴールまでの距離、右上＝着いた空港（名前と写真）、左下＝PILOT/FLIGHTS、右下＝残り時間
+   右のパネル：上＝言葉と説明、下＝出発便 */
+#hud-top { top: 14px; left: 16px; max-width: calc(100% - 300px); }
+#airport-card { position: absolute; top: 14px; right: 16px; width: 260px; z-index: 3;
+  background: rgba(0,8,30,.86); border: 1px solid rgba(79,195,255,.6); box-shadow: 0 0 18px rgba(79,195,255,.25); }
+#airport-card #here-addr { padding: 8px 12px; font: 900 15px/1.35 var(--sans); color: #fff; border-bottom: 1px solid rgba(79,195,255,.35); word-break: break-word; }
+#airport-card #here-photo { margin: 0; }
+#airport-card #here-photo img, #airport-card #here-photo .noimg { height: 150px; border: 0; }
+#airport-card #here-photo .noimg { border-bottom: 1px dashed var(--line); }
+#airport-card #here-photo figcaption { padding: 2px 8px 0; font-size: 9px; }
+#airport-card .ap-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 12px 8px; }
+#airport-card #here-meta { margin: 0; font: 10px var(--mono); color: var(--dim); }
+#airport-card #here-sv { margin: 0; font-size: 10px; }
+#hud-timer { top: auto; bottom: 16px; right: 16px; }
+#hud-sub { bottom: 16px; left: 16px; flex-direction: column; gap: 4px; }
+#map-hint { display: none; }
+#map-tools { top: 50%; bottom: auto; transform: translateY(-50%); }
+#here h1 { margin: 10px 0 10px; font-size: 40px; }
+#here-desc { font-size: 15px; line-height: 1.8; }
+@media (max-width: 860px) {
+  #hud-top { max-width: calc(100% - 170px); }
+  #airport-card { top: 8px; right: 8px; width: 150px; }
+  #airport-card #here-addr { padding: 5px 8px; font-size: 11px; }
+  #airport-card #here-photo img, #airport-card #here-photo .noimg { height: 72px; }
+  #airport-card .ap-foot { padding: 4px 8px 5px; }
+  #airport-card #here-sv { display: none; }
+  #hud-timer { bottom: 8px; right: 8px; top: auto; }
+  #hud-sub { display: flex; bottom: 8px; left: 8px; font-size: 11px; }
+  #map-tools { right: 8px; }
+  #here h1 { font-size: 28px; margin: 6px 0; }
+  #here-desc { font-size: 13px; }
+}

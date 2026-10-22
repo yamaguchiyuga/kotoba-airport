@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=14">
+<link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
 <div id="app">
@@ -16,6 +16,16 @@
     <canvas id="live"></canvas>
     <div id="hud-top">
       <div class="hud-big"><span class="jlbl" id="hud-dist-lbl">ゴールまで</span><span id="hud-dist">— km</span></div>
+    </div>
+    <!-- 地図の右上：着いた空港の名前と写真 -->
+    <div id="airport-card">
+      <div id="here-addr">—</div>
+      <figure id="here-photo">
+        <img id="here-photo-img" alt="" hidden>
+        <span class="noimg">✈</span>
+        <figcaption><a id="here-photo-credit" target="_blank" rel="noopener" hidden>写真：Wikimedia Commons</a></figcaption>
+      </figure>
+      <div class="ap-foot"><span id="here-meta"></span><a id="here-sv" target="_blank" rel="noopener">▶ ストリートビュー</a></div>
     </div>
     <div id="hud-timer">
       <span class="jlbl">残り時間</span>
@@ -40,26 +50,11 @@
   </div>
 
   <aside id="panel">
+    <!-- 右上：言葉とその説明 -->
     <section id="here">
       <div class="lbl">現在地 / NOW AT</div>
-      <div class="here-grid">
-        <!-- 左：空港（小さく） -->
-        <div class="here-side">
-          <figure id="here-photo">
-            <img id="here-photo-img" alt="" hidden>
-            <span class="noimg">✈</span>
-            <figcaption><a id="here-photo-credit" target="_blank" rel="noopener" hidden>写真：Wikimedia Commons</a></figcaption>
-          </figure>
-          <div id="here-addr">—</div>
-          <div id="here-meta"></div>
-          <a id="here-sv" target="_blank" rel="noopener">▶ ストリートビュー</a>
-        </div>
-        <!-- 右：言葉とその説明 -->
-        <div class="here-main">
-          <h1 id="here-word">—</h1>
-          <p id="here-desc"></p>
-        </div>
-      </div>
+      <h1 id="here-word">—</h1>
+      <p id="here-desc"></p>
     </section>
     <section id="board">
       <div class="board-head">
@@ -126,6 +121,6 @@
   </div>
 </div>
 
-<script src="main.js?v=14"></script>
+<script src="main.js?v=15"></script>
 </body>
 </html>
