@@ -278,3 +278,22 @@ a { color: var(--ink); }
   #here h1 { font-size: 28px; margin: 6px 0; }
   #here-desc { font-size: 13px; }
 }
+
+/* 種明かし（中学生向けの説明） */
+#end-reveal .lead { font-size: 14px; color: #fff; }
+#end-reveal .src { padding-left: 18px; margin: 0 0 10px; font-size: 12px; color: #c9d6ee; }
+#end-reveal .src li { margin-bottom: 6px; }
+#end-reveal .steps { list-style: none; padding: 0; margin: 0 0 6px; }
+#end-reveal .steps li { margin-bottom: 10px; padding: 8px 10px; border-left: 3px solid #4fc3ff; background: rgba(79, 195, 255, .06); }
+#end-reveal .steps li b:first-child { font-size: 14px; color: #fff; }
+
+/* 種明かしの数式・読み方・このゲームでの使い方 */
+#end-reveal .note { font-size: 11px; color: var(--dim); }
+#end-reveal .f { margin: 6px 0; padding: 6px 10px; background: rgba(0, 0, 0, .45); border: 1px solid rgba(79, 195, 255, .35);
+  font: 13px/1.6 'JetBrains Mono', var(--mono), monospace; color: #e8f6ff; overflow-x: auto; white-space: nowrap; }
+#end-reveal .read { font-size: 12px; color: #c9d6ee; margin: 4px 0; }
+#end-reveal .how { font-size: 12px; color: #d6deee; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); }
+#end-reveal .how b { color: #ffd34f; }
+
+/* hidden を付けた要素は必ず隠す（display の指定より優先） */
+[hidden] { display: none !important; }
