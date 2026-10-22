@@ -297,3 +297,16 @@ a { color: var(--ink); }
 
 /* hidden を付けた要素は必ず隠す（display の指定より優先） */
 [hidden] { display: none !important; }
+
+/* 偶然の一致 */
+.pop-tabs button { padding: 6px 10px; font-size: 13px; }
+#pop-coin { padding-top: 10px; font-size: 13px; line-height: 1.8; color: #d6deee; }
+#pop-coin .coin-lead b { color: #ffd34f; }
+.coin-list { list-style: none; padding: 0; margin: 10px 0 0; }
+.coin-list li { padding: 8px 10px; margin-bottom: 8px; border-left: 3px solid #ffd34f; background: rgba(255, 211, 79, .06); }
+.coin-list li b { color: #fff; font-size: 14px; }
+.coin-list li span { font-size: 12px; color: #c9d6ee; }
+#here-coin { margin-top: 10px; padding: 8px 10px; border: 1px solid #ffd34f; background: rgba(255, 211, 79, .08); font-size: 13px; color: #ffe9a8;
+  animation: coinIn .6s ease-out; }
+#here-coin b { color: #ffd34f; margin-right: 4px; }
+@keyframes coinIn { from { transform: scale(.9); opacity: 0; } }

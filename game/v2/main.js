@@ -647,6 +647,9 @@ function arrive(w) {
   $('here-word').textContent = w.word;
   $('here-addr').textContent = w.address || '—';
   $('here-desc').textContent = w.desc || '';
+  const coin = COINCIDENCE_NOTE[w.word];
+  $('here-coin').hidden = !coin;
+  if (coin) $('here-coin').innerHTML = `<b>偶然の一致！</b> ${esc(coin)}`;
   $('here-sv').href = streetView(w);
   $('here-meta').textContent = `${w.iata} ・ ${['', '地方空港', '中規模空港', '拠点空港', 'ハブ空港'][w.tier]}`;
   $('board-total').textContent = `本日の発着 ${w.linksTotal}便`;
@@ -818,6 +821,7 @@ function endGame(reached) {
   $('end-route').textContent = '航路：' + S.route.map((w) => w.word).join(' → ');
   renderRanking(rec);
   renderReveal();
+  renderCoincidences();
   S.showRoute = { t0: performance.now() };
   camFit([...S.route, GOAL]);
   setTimeout(() => $('screen-end').classList.remove('hidden'), 1200);
@@ -854,8 +858,29 @@ function renderRouteList() {
     if (w.wiki) getPhoto(w.wiki).then((p) => { if (!p) return; const img = li.querySelector('.rt-photo'); img.onload = () => { img.hidden = false; }; img.src = p.src; });
   });
 }
+// ---------------------------------------------------------------- 偶然の一致
+// 住所は意味と関係なく決めたのに、たまたま言葉にぴったりの国の空港に住んでいた言葉（データから探して選んだ）
+const COINCIDENCES = [
+  ['ポルトガル語', 'ブラジルは、ポルトガル語を話す国。'],
+  ['インド発祥の宗教', 'インドで生まれた宗教が、インドの空港に。'],
+  ['シカゴ条約', 'アメリカのシカゴで結ばれた「空の旅のルール」の条約。しかも住所が空港。'],
+  ['大相撲', '日本の国技が、日本の空港に。'],
+  ['トリニティ実験', 'アメリカで行われた、人類最初の核実験。'],
+  ['戦争と平和 (1956年の映画)', 'イタリアとアメリカで作られた映画が、イタリアの空港に。'],
+  ['ポトマック川', 'アメリカの川が、アメリカの空港に。'],
+  ['焼き干し', '日本の昔ながらの保存食が、北海道の空港に。'],
+  ['キム・ポッシブル', 'アメリカのアニメが、アメリカの空港に。'],
+  ['1963年日本グランプリ (4輪)', '日本のレースが、日本の空港に。'],
+];
+const COINCIDENCE_NOTE = Object.fromEntries(COINCIDENCES);
+function renderCoincidences() {
+  const items = COINCIDENCES.map(([t, note]) => [WORDS.find((w) => w.word === t), note]).filter(([w]) => w);
+  $('pop-coin').innerHTML = `<p class="coin-lead">言葉の住所は、意味とは関係なく、言葉どうしのつながりだけで決めました。<br>それなのに、${WORDS.length}語のうち十数語が、<b>たまたま言葉にぴったりの国の空港</b>に住んでいました。</p>
+    <ul class="coin-list">${items.map(([w, note]) => `<li><b>${esc(shortName(w.word))}</b> → ${esc(w.address)}<br><span>${esc(note)}</span></li>`).join('')}</ul>`;
+}
+
 function popTab(name) {
-  for (const t of ['route', 'reveal']) {
+  for (const t of ['route', 'reveal', 'coin']) {
     $('tab-' + t).classList.toggle('on', t === name);
     $('pane-' + t).classList.toggle('hidden', t !== name);
   }
@@ -1034,7 +1059,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=20').then((r) => r.json()),
+      fetch('data/words.json?v=21').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
@@ -1061,6 +1086,7 @@ async function boot() {
     $('reveal-tab').addEventListener('click', () => openReveal(true));
     $('tab-route').addEventListener('click', () => popTab('route'));
     $('tab-reveal').addEventListener('click', () => popTab('reveal'));
+    $('tab-coin').addEventListener('click', () => popTab('coin'));
     $('btn-again').addEventListener('click', () => { hideReveal(); camHome(); $('screen-end').classList.add('hidden'); $('screen-start').classList.remove('hidden'); $('name').focus(); });
     window.addEventListener('resize', resize);
     $('name').focus();
