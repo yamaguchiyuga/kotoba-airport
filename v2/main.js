@@ -78,6 +78,12 @@ function camFit(points, maxK = CONFIG.maxZoom) {
   CAM = { k, cx: (Math.max(...xs) + Math.min(...xs)) / 2, cy: (Math.max(...ys) + Math.min(...ys)) / 2 };
 }
 const camHome = () => { CAM = { k: 1, cx: W / 2, cy: H / 2 }; };
+// 空港に着いたら：その空港を必ず地図の真ん中に。拡大の大きさは、ゴールが画面の中に入るくらいに合わせる
+function camCenter(w) {
+  const d = Math.hypot(GOAL.x - w.x, GOAL.y - w.y);
+  const k = Math.max(1, Math.min(CONFIG.maxZoom, (Math.min(W, H) * 0.42) / (d || 1e-6)));
+  CAM = { k, cx: w.x, cy: w.y };
+}
 
 // カメラを目標に向かって少しずつ近づける（毎フレーム呼ぶ）
 function stepCamera(dt) {
@@ -107,7 +113,7 @@ function resize() {
   buildMesh();
   baseDirty = true;
   // 画面の大きさが変わっても（スマホの回転など）、遊んでいる途中なら現在地に寄り直す
-  if (S.cur && S.running && !S.flying) camFit([S.cur, GOAL]);
+  if (S.cur && S.running && !S.flying) camCenter(S.cur);
 }
 
 // 日本列島の形を一度だけ Path2D（図形データ）にしておく。ズームのたびに作り直さなくて済む
@@ -436,7 +442,7 @@ function setupPointer() {
   $('zoom-in').addEventListener('click', () => { CAM = null; zoomAt(W / 2, H / 2, 1.6); });
   $('zoom-out').addEventListener('click', () => { CAM = null; zoomAt(W / 2, H / 2, 1 / 1.6); });
   $('zoom-reset').addEventListener('click', camHome);
-  $('zoom-here').addEventListener('click', () => S.cur && camFit([S.cur, GOAL]));
+  $('zoom-here').addEventListener('click', () => S.cur && camCenter(S.cur));
 }
 
 // ---------------------------------------------------------------- ゲーム進行
@@ -539,7 +545,7 @@ function stepIntro(now) {
     $('intro').classList.add('decided');
     $('intro-word').textContent = I.start.word;
     $('intro-addr').textContent = I.start.address;
-    camFit([I.start, GOAL]);
+    camCenter(I.start);
   } else if (t >= t3) {
     S.intro = null;
     $('intro').classList.add('go');
@@ -571,23 +577,54 @@ async function findPhoto(title) {
   const a = await wikiApi('en.wikipedia.org', { action: 'query', redirects: 1, titles: title,
     prop: 'pageprops|pageimages', ppprop: 'wikibase_item', piprop: 'thumbnail|name', pithumbsize: 480 });
   const page = a.query?.pages?.[0];
-  // ① Commons の専用カテゴリから
+  const lead = page?.thumbnail?.source ? { src: page.thumbnail.source, page: 'https://en.wikipedia.org/wiki/File:' + encodeURIComponent(page.pageimage ?? '') } : null;
+  // ① Commons の専用カテゴリから（どこかで失敗しても ② の代表写真には進む）
   const qid = page?.pageprops?.wikibase_item;
-  if (qid) {
+  if (!qid) return lead;
+  const toPhoto = (p) => (p?.imageinfo?.[0]?.thumburl ? { src: p.imageinfo[0].thumburl, page: 'https://commons.wikimedia.org/wiki/' + encodeURIComponent(p.title) } : null);
+  const usable = (pages) => (pages ?? []).filter((p) => /image\/(jpeg|png)/.test(p.imageinfo?.[0]?.mime ?? '') && !PHOTO_BAD.test(p.title));
+  const touristy = (files) => files.filter((p) => PHOTO_GOOD.test(p.title))
+    .sort((x, y) => (PHOTO_BEST.test(y.title) ? 1 : 0) - (PHOTO_BEST.test(x.title) ? 1 : 0) || (x.index ?? 0) - (y.index ?? 0));
+  let cat = null, files = [];
+  try {
     const e = await wikiApi('www.wikidata.org', { action: 'wbgetclaims', entity: qid, property: 'P373' });
-    const cat = e.claims?.P373?.[0]?.mainsnak?.datavalue?.value;
-    if (cat) {
-      const f = await wikiApi('commons.wikimedia.org', { action: 'query', generator: 'categorymembers', gcmtitle: 'Category:' + cat,
-        gcmtype: 'file', gcmlimit: 50, prop: 'imageinfo', iiprop: 'url|mime', iiurlwidth: 480 });
-      const files = (f.query?.pages ?? []).filter((p) => /image\/(jpeg|png)/.test(p.imageinfo?.[0]?.mime ?? '') && !PHOTO_BAD.test(p.title));
-      const good = files.filter((p) => PHOTO_GOOD.test(p.title)).sort((x, y) => (PHOTO_BEST.test(y.title) ? 1 : 0) - (PHOTO_BEST.test(x.title) ? 1 : 0));
-      const pick = good[0] ?? files[0];
-      if (pick?.imageinfo?.[0]?.thumburl) return { src: pick.imageinfo[0].thumburl, page: 'https://commons.wikimedia.org/wiki/' + encodeURIComponent(pick.title) };
-    }
-  }
-  // ② 記事の代表写真
-  if (page?.thumbnail?.source) return { src: page.thumbnail.source, page: 'https://en.wikipedia.org/wiki/File:' + encodeURIComponent(page.pageimage ?? '') };
-  return null;
+    cat = e.claims?.P373?.[0]?.mainsnak?.datavalue?.value ?? null;
+  } catch {}
+  if (!cat) return lead ?? (await cityPhoto(qid));
+  // 1) 専用カテゴリ直下で、ファイル名がターミナル・中・外観らしい写真
+  try {
+    const f = await wikiApi('commons.wikimedia.org', { action: 'query', generator: 'categorymembers', gcmtitle: 'Category:' + cat,
+      gcmtype: 'file', gcmlimit: 200, prop: 'imageinfo', iiprop: 'url|mime', iiurlwidth: 480 });
+    files = usable(f.query?.pages);
+    const pick1 = touristy(files)[0];
+    if (pick1) return toPhoto(pick1);
+  } catch {}
+  // 2) サブカテゴリ（「ターミナル1」「ターミナルの中」など）まで探す。ファイル名で確かめるので関係ない写真は弾く
+  try {
+    const s = await wikiApi('commons.wikimedia.org', { action: 'query', generator: 'search', gsrnamespace: 6, gsrlimit: 30,
+      gsrsearch: `deepcategory:"${cat}" filetype:bitmap terminal OR interior OR lounge OR hall OR departure OR concourse OR check-in OR entrance OR building`,
+      prop: 'imageinfo', iiprop: 'url|mime', iiurlwidth: 480 });
+    const pick2 = touristy(usable(s.query?.pages))[0];
+    if (pick2) return toPhoto(pick2);
+  } catch {}
+  // 3) 記事の代表写真 → 4) 専用カテゴリにある、ほかの写真
+  return lead ?? toPhoto(files[0]) ?? (await cityPhoto(qid));
+}
+// 5) 空港の写真がまったくないとき：空港のある街の写真（Wikidata：空港の P931「結んでいる場所」→ その街の P18「画像」）
+async function cityPhoto(qid) {
+  try {
+    const fromFile = (file, note) => ({ src: 'https://commons.wikimedia.org/wiki/Special:FilePath/' + encodeURIComponent(file) + '?width=480',
+      page: 'https://commons.wikimedia.org/wiki/File:' + encodeURIComponent(file), note });
+    // （空港自身の Wikidata 画像は、別の空港の写真や地図が付いていることがあったので使わない）
+    const c = await wikiApi('www.wikidata.org', { action: 'wbgetclaims', entity: qid, property: 'P931' });
+    const city = c.claims?.P931?.[0]?.mainsnak?.datavalue?.value?.id;
+    if (!city) return null;
+    const e = await wikiApi('www.wikidata.org', { action: 'wbgetentities', ids: city, props: 'claims|labels', languages: 'ja|en' });
+    const ent = e.entities?.[city];
+    const file = ent?.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
+    const name = ent?.labels?.ja?.value ?? ent?.labels?.en?.value ?? '';
+    return file && /\.jpe?g$/i.test(file) && !PHOTO_BAD.test(file) ? fromFile(file, `空港のある街：${name}`) : null;   // 写真（JPEG）だけ。地図の画像は除く
+  } catch { return null; }
 }
 // 写真の枠はいつも出しておき（写真がないときは ✈ の印）、写真が届いたら差し替える
 function showPhoto(w) {
@@ -601,6 +638,8 @@ function showPhoto(w) {
     img.onload = () => { if (S.photoFor !== w) return; img.hidden = false; credit.hidden = false; $('here-photo').classList.add('has-img'); };
     img.src = p.src; img.alt = w.airport;
     credit.href = p.page;
+    // 街の写真のときは、空港の写真ではないことが分かるように書く
+    credit.textContent = p.note ? `${p.note}（写真：Wikimedia Commons）` : '写真：Wikimedia Commons';
   });
 }
 
@@ -742,7 +781,7 @@ function land(to) {
   S.flying = null;
   S.legs++;
   S.route.push(to);
-  camFit([to, GOAL]);
+  camCenter(to);
   arrive(to);
 }
 
@@ -924,7 +963,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=9').then((r) => r.json()),
+      fetch('data/words.json?v=14').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
