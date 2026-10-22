@@ -568,17 +568,18 @@ async function getPhoto(title) {
   PHOTO_CACHE.set(title, photo);
   return photo;
 }
+// 写真の枠はいつも出しておき（写真がないときは ✈ の印）、写真が届いたら差し替える
 function showPhoto(w) {
-  const fig = $('here-photo');
-  fig.hidden = true;
+  const img = $('here-photo-img'), credit = $('here-photo-credit');
+  img.hidden = true; credit.hidden = true;
+  $('here-photo').classList.remove('has-img');
   S.photoFor = w;
   if (!w?.wiki) return;
   getPhoto(w.wiki).then((p) => {
     if (S.photoFor !== w || !p) return;   // 写真が届く前に別の空港へ飛んだら出さない
-    const img = $('here-photo-img');
-    img.onload = () => { if (S.photoFor === w) fig.hidden = false; };
+    img.onload = () => { if (S.photoFor !== w) return; img.hidden = false; credit.hidden = false; $('here-photo').classList.add('has-img'); };
     img.src = p.src; img.alt = w.airport;
-    $('here-photo-credit').href = p.page;
+    credit.href = p.page;
   });
 }
 
@@ -589,7 +590,7 @@ function arrive(w) {
   $('here-addr').textContent = w.address || '—';
   $('here-desc').textContent = w.desc || '';
   $('here-sv').href = streetView(w);
-  $('here-meta').textContent = `${['', '地方空港', '中規模空港', '拠点空港', 'ハブ空港'][w.tier]} / ${w.iata} / ${w.lat.toFixed(3)}, ${w.lon.toFixed(3)}`;
+  $('here-meta').textContent = `${w.iata} ・ ${['', '地方空港', '中規模空港', '拠点空港', 'ハブ空港'][w.tier]}`;
   $('board-total').textContent = `本日の発着 ${w.linksTotal}便`;
   $('hud-dist').textContent = `${fmtKm(w.distGoalKm)} km`;
   $('hud-legs').textContent = S.legs;
@@ -900,7 +901,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=7').then((r) => r.json()),
+      fetch('data/words.json?v=8').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
