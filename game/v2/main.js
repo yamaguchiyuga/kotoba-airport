@@ -7,7 +7,8 @@ const CONFIG = {
   // 便の選び方
   hopMinKm: 800,                           // 便の飛距離の上限は「ゴールまでの距離 × hopRatio」。ただしこれより短くはしない
   hopRatio: 1.5,
-  keepRatio: 0.5,                          // 1回の便で、ゴールまでの距離は最大でも半分までしか縮まない
+  keepRatio: 0.5,
+  farShare: 0.25,                          // 掲示板のうち「遠ざかる便」の割合（残りは近づく便）                          // 1回の便で、ゴールまでの距離は最大でも半分までしか縮まない
   earlySec: 25,                            // 最初のこの秒数は、ゴールの近く（earlyKm 以内）へ行く便を出さない
   earlyKm: 2500,
   boostAtSec: [35, 15],                    // 残りがこの秒数を切って遅れていたら、追い風便を 1便・2便 出す
@@ -455,6 +456,7 @@ function loop(now) {
 }
 
 function startGame() {
+  hideReveal();
   S.name = $('name').value.trim() || 'NO NAME';
   const candidates = WORDS.filter((w) => w !== GOAL && w.distGoalKm > DATA.startExcludeKm && w.flights.length && REACHABLE.has(w.id));
   const start = pick(candidates.length ? candidates : WORDS);
@@ -467,6 +469,7 @@ function startGame() {
   $('screen-end').classList.add('hidden');
   clearInterval(S.rotateTimer);
   $('flights').innerHTML = ''; $('board-foot').textContent = '';
+  showPhoto(null);
   $('here-word').textContent = '……'; $('here-addr').textContent = '出発地を抽選中'; $('here-desc').textContent = '';
   $('here-meta').textContent = ''; $('board-total').textContent = '';
   $('here-sv').removeAttribute('href');
@@ -546,7 +549,41 @@ function stepIntro(now) {
   }
 }
 
+// ---------------------------------------------------------------- 空港の写真（その場で Wikipedia から取ってくる）
+// データには空港の記事名だけが入っている。写真は、着いたときに遊んでいる人のブラウザが取りに行く。
+// 自由に使えるライセンスの写真だけ（Wikipedia の pageimages は標準で free のみを返す）
+const PHOTO_CACHE = new Map();
+async function getPhoto(title) {
+  if (PHOTO_CACHE.has(title)) return PHOTO_CACHE.get(title);
+  let photo = null;
+  try {
+    const url = 'https://en.wikipedia.org/w/api.php?' + new URLSearchParams({
+      action: 'query', format: 'json', formatversion: 2, origin: '*', redirects: 1,
+      prop: 'pageimages', piprop: 'thumbnail|name', pithumbsize: 480, titles: title,
+    });
+    const j = await (await fetch(url)).json();
+    const p = j.query?.pages?.[0];
+    if (p?.thumbnail?.source) photo = { src: p.thumbnail.source, page: 'https://en.wikipedia.org/wiki/File:' + encodeURIComponent(p.pageimage ?? '') };
+  } catch {}
+  PHOTO_CACHE.set(title, photo);
+  return photo;
+}
+function showPhoto(w) {
+  const fig = $('here-photo');
+  fig.hidden = true;
+  S.photoFor = w;
+  if (!w?.wiki) return;
+  getPhoto(w.wiki).then((p) => {
+    if (S.photoFor !== w || !p) return;   // 写真が届く前に別の空港へ飛んだら出さない
+    const img = $('here-photo-img');
+    img.onload = () => { if (S.photoFor === w) fig.hidden = false; };
+    img.src = p.src; img.alt = w.airport;
+    $('here-photo-credit').href = p.page;
+  });
+}
+
 function arrive(w) {
+  showPhoto(w);
   S.cur = w;
   $('here-word').textContent = w.word;
   $('here-addr').textContent = w.address || '—';
@@ -564,7 +601,7 @@ function arrive(w) {
 // ・ゴールに近づくほど、便の飛距離は短くなる（最後は細かく刻む）
 // ・最初のうちは、ゴールの近く（日本のあたり）へ一気に行く便は出さない
 // ・時間がないのに進んでいないときは、ゴールへ大きく近づく「追い風便」が出る（マリオカートの救済のように）
-// ・それ以外は「近づく便」と「遠ざかる便」を半分ずつ
+// ・それ以外は、ほとんどが「近づく便」。「遠ざかる便」は4分の1だけ
 const hopKm = (a, b) => km(a, b);
 function flightPools(w) {
   const elapsed = CONFIG.timeLimitSec - S.timeLeft;
@@ -608,8 +645,8 @@ function setupBoard(w) {
   const P = flightPools(w);
   shuffle(P.near); shuffle(P.far);
   const nearList = [...P.near, ...P.nearSpare], farList = [...P.far, ...P.farSpare];
-  // 遠ざかる便を半分（足りなければ近づく便で埋める。逆も同じ）
-  let nFar = Math.min(farList.length, Math.floor(slots / 2));
+  // 遠ざかる便は4分の1だけ。残りは近づく便（足りなければもう一方で埋める）
+  let nFar = Math.min(farList.length, Math.floor(slots * CONFIG.farShare));
   let nNear = Math.min(nearList.length, slots - nFar);
   nFar = Math.min(farList.length, slots - nNear);
   S.board = shuffle([...farList.slice(0, nFar), ...nearList.slice(0, nNear)]);
@@ -703,11 +740,22 @@ function endGame(reached) {
   S.showRoute = { t0: performance.now() };
   camFit([...S.route, GOAL]);
   setTimeout(() => $('screen-end').classList.remove('hidden'), 1200);
+  S.revealTimer = setTimeout(() => openReveal(true), 3800);
 }
 
 // ---------------------------------------------------------------- 種明かし（終了画面）
 // 言葉の住所の決め方・自分が立ち寄った言葉の決め手・言葉の住所の分布
 const shortName = (t) => t.replace(/ \(.*\)$/, '');
+function openReveal(open) {
+  $('reveal-pop').classList.toggle('hidden', !open);
+  $('reveal-tab').classList.toggle('hidden', open);
+}
+function hideReveal() {
+  clearTimeout(S.revealTimer);
+  $('reveal-pop').classList.add('hidden');
+  $('reveal-tab').classList.add('hidden');
+}
+
 function renderReveal() {
   const near = (w, n = 3) => w.members.slice(0, n).map(shortName).join('・') || '—';
   const visited = [...new Set(S.route)];
@@ -824,7 +872,7 @@ const REACHABLE = new Set();
 async function boot() {
   try {
     const [d, land] = await Promise.all([
-      fetch('data/words.json?v=3').then((r) => r.json()),
+      fetch('data/words.json?v=4').then((r) => r.json()),
       fetch('data/world.geojson').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     DATA = d; LAND = land; WORDS = d.words;
@@ -847,7 +895,9 @@ async function boot() {
     $('btn-start').addEventListener('click', showBrief);
     $('brief-skip').addEventListener('click', finishBrief);
     $('brief-next').addEventListener('click', () => { if (++BRIEF_PAGE >= briefPages().length) finishBrief(); else renderBrief(); });
-    $('btn-again').addEventListener('click', () => { camHome(); $('screen-end').classList.add('hidden'); $('screen-start').classList.remove('hidden'); $('name').focus(); });
+    $('reveal-close').addEventListener('click', () => openReveal(false));
+    $('reveal-tab').addEventListener('click', () => openReveal(true));
+    $('btn-again').addEventListener('click', () => { hideReveal(); camHome(); $('screen-end').classList.add('hidden'); $('screen-start').classList.remove('hidden'); $('name').focus(); });
     window.addEventListener('resize', resize);
     $('name').focus();
     requestAnimationFrame((t) => { S.lastTick = t; loop(t); });
