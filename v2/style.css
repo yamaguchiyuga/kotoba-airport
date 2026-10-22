@@ -145,3 +145,28 @@ a { color: var(--ink); }
 /* 追い風便（遅れているときの救済） */
 #flights li.boost button { border-color: #ffd34f; background: rgba(255, 211, 79, .08); box-shadow: 0 0 14px rgba(255, 211, 79, .35); }
 #flights li.boost .stat { color: #ffd34f; font-weight: 700; letter-spacing: .2em; }
+
+/* 空港の写真 */
+#here-photo { margin: 12px 0 0; }
+#here-photo img { display: block; width: 100%; max-height: 170px; object-fit: cover; border: 1px solid var(--line); background: #0b0b0b; }
+#here-photo figcaption { margin-top: 4px; font-size: 10px; text-align: right; }
+#here-photo figcaption a { color: var(--dim); text-decoration: none; }
+#here-photo figcaption a:hover { color: var(--ink); text-decoration: underline; }
+
+/* 種明かし：最後にポップアップ。閉じるとタブが残る */
+#reveal-pop { position: fixed; left: 16px; bottom: 16px; width: min(440px, calc(100% - 32px)); max-height: min(70vh, 640px); overflow: auto;
+  z-index: 12; background: rgba(0, 8, 30, .96); border: 1px solid rgba(79, 195, 255, .7); box-shadow: 0 0 28px rgba(79, 195, 255, .3);
+  padding: 0 20px 18px; animation: popIn .35s ease-out; }
+#reveal-pop .pop-head { position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center; padding: 14px 0 10px;
+  background: rgba(0, 8, 30, .98); font: 900 18px var(--sans); color: #9fdcff; border-bottom: 1px solid var(--line); }
+#reveal-close { background: transparent; color: var(--ink); border: 1px solid var(--line); padding: 4px 10px; font: 12px var(--sans); cursor: pointer; }
+#reveal-close:hover { border-color: var(--ink); }
+#reveal-pop #end-reveal { margin-top: 0; border-top: 0; }
+#reveal-pop #end-reveal h2:first-child { display: none; }
+#reveal-tab { position: fixed; left: 16px; bottom: 0; z-index: 12; background: rgba(0, 8, 30, .95); color: #9fdcff; border: 1px solid rgba(79, 195, 255, .7);
+  border-bottom: 0; padding: 8px 16px; font: 700 13px var(--sans); cursor: pointer; }
+#reveal-tab:hover { background: #0a2a6e; }
+@keyframes popIn { from { transform: translateY(30px); opacity: 0; } }
+@media (max-width: 860px) {
+  #reveal-pop { left: 8px; right: 8px; width: auto; bottom: 8px; max-height: 60vh; }
+}

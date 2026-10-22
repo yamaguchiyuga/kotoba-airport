@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 <div id="app">
@@ -41,6 +41,10 @@
       <div class="lbl">現在地 / NOW AT</div>
       <h1 id="here-word">—</h1>
       <div id="here-addr">—</div>
+      <figure id="here-photo" hidden>
+        <img id="here-photo-img" alt="">
+        <figcaption><a id="here-photo-credit" target="_blank" rel="noopener">写真：Wikimedia Commons</a></figcaption>
+      </figure>
       <p id="here-desc"></p>
       <a id="here-sv" target="_blank" rel="noopener">▶ この場所を見る（ストリートビュー）</a>
       <div id="here-meta"></div>
@@ -89,6 +93,12 @@
   </div>
 </div>
 
+<aside id="reveal-pop" class="hidden">
+  <div class="pop-head"><span>種明かし</span><button id="reveal-close" title="閉じる">✕ 閉じる</button></div>
+  <div id="end-reveal"></div>
+</aside>
+<button id="reveal-tab" class="hidden">▲ 種明かし</button>
+
 <div id="screen-end" class="screen hidden">
   <div class="card wide">
     <div class="lbl" id="end-kind">RESULT</div>
@@ -97,10 +107,9 @@
     <h2>RANKING</h2>
     <ol id="ranking"></ol>
     <button id="btn-again">もう一度飛ぶ</button>
-    <div id="end-reveal"></div>
   </div>
 </div>
 
-<script src="main.js?v=3"></script>
+<script src="main.js?v=4"></script>
 </body>
 </html>
