@@ -1,3 +1,6 @@
+/* デジタル数字のフォント（DSEG7、SIL Open Font License） */
+@font-face { font-family: 'DSEG7'; font-weight: 700; font-display: swap;
+  src: url('https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG7-Classic/DSEG7Classic-Bold.woff2') format('woff2'); }
 :root {
   --bg: #000;
   --ink: #f2f2f2;
@@ -188,3 +191,37 @@ a { color: var(--ink); }
 .rt-near { font-size: 11px; color: var(--dim); margin-top: 2px; }
 .rt-photo { width: 86px; height: 60px; object-fit: cover; border: 1px solid var(--line); }
 @keyframes rtIn { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
+
+/* ゴールまでの距離：画面上の真ん中に大きく */
+#hud-top .hud-big { padding: 10px 26px 12px; min-width: 260px; }
+#hud-top .hud-big .jlbl { font-size: 14px; }
+#hud-top .hud-big span:last-child { font-size: 60px; letter-spacing: .02em; text-shadow: 0 0 18px rgba(79,195,255,.6); }
+
+/* 残り時間：右端にデジタル数字で */
+#hud-timer { position: absolute; top: 14px; right: 16px; z-index: 3; pointer-events: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  background: rgba(0,8,30,.82); border: 1px solid rgba(79,195,255,.6); padding: 8px 14px 12px; box-shadow: 0 0 18px rgba(79,195,255,.25); }
+#hud-timer .jlbl { font: 700 12px var(--sans); color: #9fc2ff; letter-spacing: .08em; }
+.seg { position: relative; font: 700 40px/1 'DSEG7', var(--mono); }
+.seg-ghost { position: absolute; right: 0; top: 0; color: rgba(127, 243, 255, .08); }   /* 消えている目盛り（電光掲示板らしさ） */
+#hud-time { position: relative; color: #7ff3ff; text-shadow: 0 0 10px rgba(79, 195, 255, .9), 0 0 2px #fff; }
+#hud-time.warn { color: #ff5a5a !important; text-shadow: 0 0 12px rgba(255, 90, 90, .9); }
+
+@media (max-width: 860px) {
+  #hud-top { left: 8px; transform: none; }
+  #hud-top .hud-big { min-width: 0; padding: 6px 12px 8px; }
+  #hud-top .hud-big .jlbl { font-size: 10px; }
+  #hud-top .hud-big span:last-child { font-size: 30px; }
+  #hud-timer { top: 8px; right: 8px; padding: 6px 10px 8px; }
+  #hud-timer .jlbl { font-size: 10px; }
+  .seg { font-size: 24px; }
+}
+
+/* 重ならないように：距離は左上、タイマーは右上、パイロット名は左下 */
+#hud-top { left: 16px; transform: none; max-width: calc(100% - 230px); }
+#hud-top .hud-big { min-width: 0; align-items: flex-start; }
+#hud-top .hud-big span:last-child { font-size: clamp(30px, 4.6vw, 60px); }
+#hud-sub { top: auto; bottom: 40px; flex-direction: row; gap: 14px; }
+@media (max-width: 860px) {
+  #hud-top { left: 8px; max-width: calc(100% - 150px); }
+  #hud-top .hud-big span:last-child { font-size: 28px; }
+}
